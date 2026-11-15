@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="description" content="Arcade Bubble Shooter with neon aesthetics, fluid physics, and synth audio effects">
+  <meta name="theme-color" content="#0a0c16">
+  <title>Bubble Shooter Arcade</title>
+
+  <!-- Google Fonts: Futuristic Outfit & Retro Press Start 2P -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&family=Press+Start+2P&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Ambient background glow elements -->
+  <div class="ambient-glow glow-top-left" aria-hidden="true"></div>
+  <div class="ambient-glow glow-bottom-right" aria-hidden="true"></div>
+
+  <main id="app-container">
+    <div id="game-wrapper" class="glass-card">
+      
+      <!-- Top HUD Header -->
+      <header id="game-hud" class="hud-container">
+        <!-- Stats Group: Score & High Score -->
+        <div class="hud-group stats-group">
+          <div class="stat-pill score-pill">
+            <span class="stat-label">SCORE</span>
+            <span id="score" class="stat-value">0</span>
+          </div>
+          <div class="stat-pill high-score-pill">
+            <span class="stat-label">BEST</span>
+            <span id="high-score" class="stat-value">0</span>
+          </div>
+        </div>
+
+        <!-- Center Group: Level & Next Bubble -->
+        <div class="hud-group center-group">
+          <div class="stat-pill level-pill">
+            <span class="stat-label">LEVEL</span>
+            <span id="level" class="stat-value">1</span>
+          </div>
+
+          <!-- Next Bubble Preview -->
+          <div class="next-bubble-card" title="Next bubble to fire">
+            <span class="next-bubble-label">NEXT</span>
+            <div class="next-bubble-preview-wrap">
+              <canvas id="next-bubble-canvas" width="44" height="44"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Ceiling Drop Penalty / Shots Counter Group -->
+        <div class="hud-group penalty-group" title="Shots left before ceiling drops">
+          <div class="stat-pill drop-pill">
+            <span class="stat-label">DROP IN</span>
+            <div class="drop-status">
+              <div id="miss-indicators" class="miss-dots">
+                <span class="miss-dot active"></span>
+                <span class="miss-dot active"></span>
+                <span class="miss-dot active"></span>
+                <span class="miss-dot active"></span>
+                <span class="miss-dot active"></span>
+              </div>
+              <span id="miss-counter" class="stat-value counter-num">5</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Controls Group: Pause, Audio, Restart -->
+        <div class="hud-group controls-group">
+          <button id="btn-pause" class="hud-btn pause-btn" aria-label="Pause Game" title="Pause (P)">
+            <svg class="icon-pause" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <rect x="6" y="4" width="4" height="16" rx="1.5"></rect>
+              <rect x="14" y="4" width="4" height="16" rx="1.5"></rect>
+            </svg>
+            <svg class="icon-play" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <polygon points="6,4 20,12 6,20"></polygon>
+            </svg>
+          </button>
+
+          <button id="btn-mute" class="hud-btn mute-btn" aria-label="Toggle Audio" title="Mute/Unmute (M)">
+            <svg class="icon-sound-on" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"></polygon>
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+            </svg>
+            <svg class="icon-sound-off" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"></polygon>
+              <line x1="23" y1="9" x2="17" y2="15"></line>
+              <line x1="17" y1="9" x2="23" y2="15"></line>
+            </svg>
+          </button>
+
+          <button id="btn-restart" class="hud-btn restart-btn" aria-label="Restart Game" title="Restart (R)">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.5 2v6h-6M2.5 22v-6h6"></path>
+              <path d="M18.86 15.54A9 9 0 0 1 5.14 8.46l-2.64 2.64M21.5 8l-2.64-2.64A9 9 0 0 0 5.14 15.54"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Main Game Canvas Container -->
+      <div id="canvas-container" class="canvas-viewport">
+        <canvas id="game-canvas" width="480" height="640"></canvas>
+        <div id="ceiling-danger-line" class="danger-line" aria-hidden="true"></div>
+
+        <!-- MODAL OVERLAYS (Integrated over the canvas container) -->
+
+        <!-- 1. Start Game Modal -->
+        <div id="start-modal" class="modal-overlay active">
+          <div class="modal-card">
+            <div class="modal-badge">RETRO ARCADE</div>
+            <h1 class="game-title">
+              <span class="neon-title-top">BUBBLE</span>
+              <span class="neon-title-bot">SHOOTER</span>
+            </h1>
+
+            <div class="instructions-box">
+              <div class="instruction-item">
+                <span class="instruction-icon">🎯</span>
+                <div class="instruction-text">
+                  <strong>AIM & SHOOT</strong>
+                  <span>Move mouse or drag touch to aim raycast; click to fire</span>
+                </div>
+              </div>
+              <div class="instruction-item">
+                <span class="instruction-icon">💥</span>
+                <div class="instruction-text">
+                  <strong>MATCH 3 OR MORE</strong>
+                  <span>Connect clusters of the same color to pop bubbles</span>
+                </div>
+              </div>
+              <div class="instruction-item">
+                <span class="instruction-icon">⚡</span>
+                <div class="instruction-text">
+                  <strong>AVOID CEILING DROP</strong>
+                  <span>Missed shots lower the ceiling. Don't cross the danger line!</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="hotkeys-hint">
+              <span>[P] Pause</span> • <span>[M] Mute</span> • <span>[R] Restart</span>
+            </div>
+
+            <button id="btn-start" class="btn-primary glow-btn" type="button">
+              <span class="btn-glow-layer"></span>
+              <span class="btn-content">START GAME</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 2. Pause Modal -->
+        <div id="pause-modal" class="modal-overlay">
+          <div class="modal-card">
+            <div class="modal-badge">STANDBY</div>
+            <h2 class="modal-heading">GAME PAUSED</h2>
+            <p class="modal-subtext">Take a breath, champion. The bubbles await!</p>
+
+            <div class="modal-btn-group">
+              <button id="btn-resume" class="btn-primary glow-btn" type="button">
+                <span class="btn-glow-layer"></span>
+                <span class="btn-content">RESUME GAME</span>
+              </button>
+              <button id="btn-pause-restart" class="btn-secondary" type="button">
+                <span>RESTART</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Game Over Modal -->
+        <div id="game-over-modal" class="modal-overlay">
+          <div class="modal-card danger-card">
+            <div class="modal-badge danger-badge">DANGER LINE BREACHED</div>
+            <h2 class="modal-heading neon-red">GAME OVER</h2>
+
+            <div class="score-summary-grid">
+              <div class="summary-card">
+                <span class="summary-label">FINAL SCORE</span>
+                <span id="final-score" class="summary-value highlight">0</span>
+              </div>
+              <div class="summary-card">
+                <span class="summary-label">HIGH SCORE</span>
+                <span id="final-high-score" class="summary-value">0</span>
+              </div>
+            </div>
+
+            <button id="btn-play-again" class="btn-primary glow-btn danger-glow-btn" type="button">
+              <span class="btn-glow-layer"></span>
+              <span class="btn-content">PLAY AGAIN</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 4. Victory / Level Complete Modal -->
+        <div id="victory-modal" class="modal-overlay">
+          <div class="modal-card victory-card">
+            <div class="modal-badge victory-badge">BOARD CLEARED!</div>
+            <h2 class="modal-heading neon-green">STAGE COMPLETE</h2>
+            <p class="modal-subtext">Magnificent shooting! All bubbles eliminated!</p>
+
+            <div class="score-summary-grid">
+              <div class="summary-card">
+                <span class="summary-label">STAGE SCORE</span>
+                <span id="victory-score" class="summary-value highlight-green">0</span>
+              </div>
+            </div>
+
+            <div class="modal-btn-group">
+              <button id="btn-next-level" class="btn-primary glow-btn victory-glow-btn" type="button">
+                <span class="btn-glow-layer"></span>
+                <span class="btn-content">NEXT STAGE</span>
+              </button>
+              <button id="btn-victory-restart" class="btn-secondary" type="button">
+                <span>RESTART LEVEL</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Quick Controls Footer Help -->
+      <footer class="game-footer">
+        <span>Controls: Mouse/Touch Aim & Shoot • <strong>[P]</strong> Pause • <strong>[M]</strong> Mute • <strong>[R]</strong> Restart</span>
+      </footer>
+
+    </div>
+  </main>
+
+  <!-- Load Game Scripts: audio.js first, then game.js -->
+  <script src="audio.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
