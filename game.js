@@ -1291,16 +1291,30 @@
       updateAim(getCanvasCoords(e));
     });
 
+    this.canvas.addEventListener('touchstart', function (e) {
+      e.preventDefault();
+      var coords = getCanvasCoords(e);
+      updateAim(coords);
+      if (self.state === 'start') {
+        self.start();
+      }
+    }, { passive: false });
+
     this.canvas.addEventListener('touchmove', function (e) {
       e.preventDefault();
       updateAim(getCanvasCoords(e));
     }, { passive: false });
 
-    // Pointer Down / Click to Fire
+    // Pointer Down / Click to Fire or Start
     this.canvas.addEventListener('mousedown', function (e) {
       if (e.button === 0) {
-        updateAim(getCanvasCoords(e));
-        self.shoot();
+        var coords = getCanvasCoords(e);
+        updateAim(coords);
+        if (self.state === 'start') {
+          self.start();
+        } else if (self.state === 'playing') {
+          self.shoot();
+        }
       } else if (e.button === 2) {
         // Right click to swap bubbles
         e.preventDefault();
@@ -1314,12 +1328,35 @@
 
     this.canvas.addEventListener('touchend', function (e) {
       e.preventDefault();
-      self.shoot();
+      if (self.state === 'start') {
+        self.start();
+      } else if (self.state === 'playing') {
+        self.shoot();
+      }
     }, { passive: false });
 
     // Keyboard Shortcuts
     window.addEventListener('keydown', function (e) {
       var key = e.key.toUpperCase();
+
+      // If at start screen, Space, Enter, or arrows starts game
+      if (self.state === 'start') {
+        if (key === ' ' || key === 'ENTER' || key === 'SPACEBAR' || key === 'ARROWUP' || key === 'ARROWLEFT' || key === 'ARROWRIGHT') {
+          e.preventDefault();
+          self.start();
+          return;
+        }
+      }
+
+      // If game over or victory, Enter or Space restarts
+      if (self.state === 'gameover' || self.state === 'victory') {
+        if (key === ' ' || key === 'ENTER') {
+          e.preventDefault();
+          self.restart();
+          return;
+        }
+      }
+
       if (key === 'P' || key === 'ESCAPE') {
         self.togglePause();
       } else if (key === 'M') {
@@ -1342,8 +1379,17 @@
   BubbleShooterGame.prototype.bindHudButtons = function () {
     var self = this;
 
+    // Clicking anywhere on the start modal starts the game
+    if (this.dom.startModal) {
+      this.dom.startModal.addEventListener('click', function () {
+        self.start();
+      });
+      this.dom.startModal.style.cursor = 'pointer';
+    }
+
     if (this.dom.btnStart) {
-      this.dom.btnStart.addEventListener('click', function () {
+      this.dom.btnStart.addEventListener('click', function (e) {
+        e.stopPropagation();
         self.start();
       });
     }

@@ -113,7 +113,7 @@
         <!-- 1. Start Game Modal -->
         <div id="start-modal" class="modal-overlay active">
           <div class="modal-card">
-            <div class="modal-badge">RETRO ARCADE</div>
+            <div class="modal-badge">RETRO ARCADE • משחק יורה בועות</div>
             <h1 class="game-title">
               <span class="neon-title-top">BUBBLE</span>
               <span class="neon-title-bot">SHOOTER</span>
@@ -123,51 +123,52 @@
               <div class="instruction-item">
                 <span class="instruction-icon">🎯</span>
                 <div class="instruction-text">
-                  <strong>AIM & SHOOT</strong>
-                  <span>Move mouse or drag touch to aim raycast; click to fire</span>
+                  <strong>כיוון וירי • AIM & SHOOT</strong>
+                  <span>הזז עכבר לכיוון ולחץ לירי • Move mouse and click to fire</span>
                 </div>
               </div>
               <div class="instruction-item">
                 <span class="instruction-icon">💥</span>
                 <div class="instruction-text">
-                  <strong>MATCH 3 OR MORE</strong>
-                  <span>Connect clusters of the same color to pop bubbles</span>
+                  <strong>התאם 3+ • MATCH 3 OR MORE</strong>
+                  <span>חבר 3 בועות או יותר מאותו צבע לפיצוץ • Connect 3+ bubbles</span>
                 </div>
               </div>
               <div class="instruction-item">
                 <span class="instruction-icon">⚡</span>
                 <div class="instruction-text">
-                  <strong>AVOID CEILING DROP</strong>
-                  <span>Missed shots lower the ceiling. Don't cross the danger line!</span>
+                  <strong>היזהר מירידת התקרה • CEILING DROP</strong>
+                  <span>פספוסים מנמיכים את התקרה! אל תעבור את הקו • Avoid danger line</span>
                 </div>
               </div>
             </div>
 
             <div class="hotkeys-hint">
-              <span>[P] Pause</span> • <span>[M] Mute</span> • <span>[R] Restart</span>
+              <span>[רווח / קליק] התחלה</span> • <span>[P] השהייה</span> • <span>[M] שמע</span> • <span>[R] אתחול</span>
             </div>
 
             <button id="btn-start" class="btn-primary glow-btn" type="button">
               <span class="btn-glow-layer"></span>
-              <span class="btn-content">START GAME</span>
+              <span class="btn-content">▶ התחל משחק / START GAME</span>
             </button>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 8px;">לחץ בכל מקום או לחץ רווח כדי להתחיל</div>
           </div>
         </div>
 
         <!-- 2. Pause Modal -->
         <div id="pause-modal" class="modal-overlay">
           <div class="modal-card">
-            <div class="modal-badge">STANDBY</div>
-            <h2 class="modal-heading">GAME PAUSED</h2>
-            <p class="modal-subtext">Take a breath, champion. The bubbles await!</p>
+            <div class="modal-badge">STANDBY • מושהה</div>
+            <h2 class="modal-heading">משחק מושהה</h2>
+            <p class="modal-subtext">המשחק בהשהייה. לחץ כדי להמשיך!</p>
 
             <div class="modal-btn-group">
               <button id="btn-resume" class="btn-primary glow-btn" type="button">
                 <span class="btn-glow-layer"></span>
-                <span class="btn-content">RESUME GAME</span>
+                <span class="btn-content">המשך משחק / RESUME</span>
               </button>
               <button id="btn-pause-restart" class="btn-secondary" type="button">
-                <span>RESTART</span>
+                <span>אתחול / RESTART</span>
               </button>
             </div>
           </div>
@@ -177,22 +178,22 @@
         <div id="game-over-modal" class="modal-overlay">
           <div class="modal-card danger-card">
             <div class="modal-badge danger-badge">DANGER LINE BREACHED</div>
-            <h2 class="modal-heading neon-red">GAME OVER</h2>
+            <h2 class="modal-heading neon-red">המשחק הסתיים</h2>
 
             <div class="score-summary-grid">
               <div class="summary-card">
-                <span class="summary-label">FINAL SCORE</span>
+                <span class="summary-label">ניקוד / FINAL SCORE</span>
                 <span id="final-score" class="summary-value highlight">0</span>
               </div>
               <div class="summary-card">
-                <span class="summary-label">HIGH SCORE</span>
+                <span class="summary-label">שיא / HIGH SCORE</span>
                 <span id="final-high-score" class="summary-value">0</span>
               </div>
             </div>
 
             <button id="btn-play-again" class="btn-primary glow-btn danger-glow-btn" type="button">
               <span class="btn-glow-layer"></span>
-              <span class="btn-content">PLAY AGAIN</span>
+              <span class="btn-content">שחק שוב / PLAY AGAIN</span>
             </button>
           </div>
         </div>
@@ -201,12 +202,12 @@
         <div id="victory-modal" class="modal-overlay">
           <div class="modal-card victory-card">
             <div class="modal-badge victory-badge">BOARD CLEARED!</div>
-            <h2 class="modal-heading neon-green">STAGE COMPLETE</h2>
-            <p class="modal-subtext">Magnificent shooting! All bubbles eliminated!</p>
+            <h2 class="modal-heading neon-green">שלב הושלם!</h2>
+            <p class="modal-subtext">כל הכבוד! כל הבועות נוקו בהצלחה!</p>
 
             <div class="score-summary-grid">
               <div class="summary-card">
-                <span class="summary-label">STAGE SCORE</span>
+                <span class="summary-label">ניקוד שלב / STAGE SCORE</span>
                 <span id="victory-score" class="summary-value highlight-green">0</span>
               </div>
             </div>
@@ -214,10 +215,10 @@
             <div class="modal-btn-group">
               <button id="btn-next-level" class="btn-primary glow-btn victory-glow-btn" type="button">
                 <span class="btn-glow-layer"></span>
-                <span class="btn-content">NEXT STAGE</span>
+                <span class="btn-content">שלב הבא / NEXT STAGE</span>
               </button>
               <button id="btn-victory-restart" class="btn-secondary" type="button">
-                <span>RESTART LEVEL</span>
+                <span>שחק שוב / REPLAY</span>
               </button>
             </div>
           </div>
@@ -227,7 +228,7 @@
 
       <!-- Quick Controls Footer Help -->
       <footer class="game-footer">
-        <span>Controls: Mouse/Touch Aim & Shoot • <strong>[P]</strong> Pause • <strong>[M]</strong> Mute • <strong>[R]</strong> Restart</span>
+        <span>כיוון וירי: עכבר או מגע • רווח: התחלה/החלפת בועה • <strong>[P]</strong> השהייה • <strong>[M]</strong> השתקה • <strong>[R]</strong> אתחול</span>
       </footer>
 
     </div>
