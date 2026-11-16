@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>500cc GRAND PRIX '90 — LOCAL SPLIT-SCREEN</title>
+  <link rel="stylesheet" href="./style.css" />
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+</head>
+<body>
+  <!-- Fullscreen 3D WebGL Viewport Canvas -->
+  <canvas id="race-canvas" aria-label="500cc Grand Prix 3D Race Viewport"></canvas>
+
+  <!-- =====================================================================
+       PADDOCK MAIN MENU
+       ===================================================================== -->
+  <section id="paddock-menu" class="screen-overlay active" aria-label="Paddock Main Menu">
+    <div class="paddock-shell">
+      <!-- Top Championship Masthead -->
+      <header class="paddock-header">
+        <div class="masthead-brand">
+          <div class="checkered-strip" aria-hidden="true"></div>
+          <div class="masthead-titles">
+            <span class="championship-eyebrow">1990 FIM 500cc TWO-STROKE WORLD CHAMPIONSHIP SIMCADE</span>
+            <h1 class="paddock-title">500cc GRAND PRIX '90 — LOCAL SPLIT-SCREEN</h1>
+          </div>
+        </div>
+        <div class="masthead-telemetry">
+          <div id="menu-pad1-status" class="hw-pill">P1: WASD + SPACE</div>
+          <div id="menu-pad2-status" class="hw-pill">P2: ARROWS + ENTER</div>
+          <button id="btn-menu-mute" type="button" class="util-btn" title="Shortcut: M">AUDIO: ON [M]</button>
+        </div>
+      </header>
+
+      <!-- Race Engineering Configuration Strip -->
+      <div class="race-config-grid">
+        <!-- Mode Selector -->
+        <div class="config-card">
+          <label class="config-label" for="select-mode">RACE FORMAT</label>
+          <select id="select-mode" class="gp-select">
+            <option value="gp" selected>2P Split-Screen GP (8 Riders)</option>
+            <option value="duel">2P 1v1 Head-to-Head Duel</option>
+            <option value="solo">1P Solo GP Race</option>
+          </select>
+          <div class="Segmented-pills" data-for="select-mode">
+            <button type="button" class="seg-btn active" data-value="gp">2P GP (8 Riders)</button>
+            <button type="button" class="seg-btn" data-value="duel">2P 1v1 Duel</button>
+            <button type="button" class="seg-btn" data-value="solo">1P Solo GP</button>
+          </div>
+        </div>
+
+        <!-- Split Orientation Selector -->
+        <div class="config-card">
+          <label class="config-label" for="select-split">SPLIT ORIENTATION <span class="key-hint">[V]</span></label>
+          <select id="select-split" class="gp-select">
+            <option value="horizontal" selected>Horizontal (Top / Bottom)</option>
+            <option value="vertical">Vertical (Left / Right)</option>
+          </select>
+          <div class="Segmented-pills" data-for="select-split">
+            <button type="button" class="seg-btn active" data-value="horizontal">Horizontal (Top / Bottom)</button>
+            <button type="button" class="seg-btn" data-value="vertical">Vertical (Left / Right)</button>
+          </div>
+        </div>
+
+        <!-- Track Selector + Live Circuit Map Preview -->
+        <div class="config-card config-card-track">
+          <div class="track-select-col">
+            <label class="config-label" for="select-track">GRAND PRIX CIRCUIT</label>
+            <select id="select-track" class="gp-select">
+              <option value="sakura" selected>Sakura GP Circuit</option>
+              <option value="monterey">Monterey Ridge (Corkscrew)</option>
+              <option value="cathedral">Cathedral TT</option>
+            </select>
+            <div class="Segmented-pills" data-for="select-track">
+              <button type="button" class="seg-btn active" data-value="sakura">Sakura GP</button>
+              <button type="button" class="seg-btn" data-value="monterey">Monterey Ridge</button>
+              <button type="button" class="seg-btn" data-value="cathedral">Cathedral TT</button>
+            </div>
+            <p id="menu-track-desc" class="track-desc">Flowing fast 1990 GP circuit with main straight, sweeping curves, and a tight chicane.</p>
+          </div>
+          <div class="track-preview-box">
+            <canvas id="menu-track-preview" width="110" height="84" aria-label="Circuit layout preview"></canvas>
+            <span id="menu-track-meta" class="track-meta-tag">WIDTH 14M</span>
+          </div>
+        </div>
+
+        <!-- Laps & AI Difficulty -->
+        <div class="config-card config-card-dual">
+          <div class="sub-config">
+            <label class="config-label" for="select-laps">RACE DISTANCE</label>
+            <select id="select-laps" class="gp-select">
+              <option value="3" selected>3 Laps</option>
+              <option value="5">5 Laps</option>
+              <option value="8">8 Laps</option>
+            </select>
+            <div class="Segmented-pills" data-for="select-laps">
+              <button type="button" class="seg-btn active" data-value="3">3 Laps</button>
+              <button type="button" class="seg-btn" data-value="5">5 Laps</button>
+              <button type="button" class="seg-btn" data-value="8">8 Laps</button>
+            </div>
+          </div>
+          <div class="sub-config">
+            <label class="config-label" for="select-difficulty">AI CLASS DIFFICULTY</label>
+            <select id="select-difficulty" class="gp-select">
+              <option value="rookie">Rookie</option>
+              <option value="pro" selected>Pro 500cc</option>
+              <option value="legend">1990 Legend</option>
+            </select>
+            <div class="Segmented-pills" data-for="select-difficulty">
+              <button type="button" class="seg-btn" data-value="rookie">Rookie</button>
+              <button type="button" class="seg-btn active" data-value="pro">Pro 500cc</button>
+              <button type="button" class="seg-btn" data-value="legend">1990 Legend</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dual Factory Garage Bays (Player 1 & Player 2 Bike Selectors) -->
+      <div class="garage-bays">
+        <!-- Player 1 Bay -->
+        <div id="p1-garage" class="garage-bay bay-p1">
+          <div class="bay-header">
+            <div class="bay-title-group">
+              <span class="player-badge p1-badge">P1</span>
+              <div>
+                <h2 class="bay-title">PLAYER 1 MACHINE</h2>
+                <span class="bay-sub">500cc V4 TWO-STROKE FACTORY ENTRY</span>
+              </div>
+            </div>
+            <div class="control-legend">
+              <div class="legend-keys">
+                <span class="keycap">W</span><span class="keycap">S</span> Throttle/Brake ·
+                <span class="keycap">A</span><span class="keycap">D</span> Lean ·
+                <span class="keycap">Space</span> Tuck-In
+              </div>
+              <div id="p1-gamepad-badge" class="gamepad-badge">Gamepad 1: Standby (WASD + Space)</div>
+            </div>
+          </div>
+
+          <div id="p1-bike-cards" class="bike-cards-grid" role="radiogroup" aria-label="Player 1 Bike Selection">
+            <article class="bike-card selected" data-player="1" data-bike-id="akagi" tabindex="0">
+              <div class="bike-livery-bar" style="background: linear-gradient(90deg, #d91424 0%, #d91424 65%, #ffffff 65%, #ffffff 85%, #151515 85%);"></div>
+              <div class="bike-card-top">
+                <div>
+                  <h3 class="bike-name">Akagi V4-500 #1</h3>
+                  <span class="bike-team">Apex Red Racing</span>
+                </div>
+                <span class="race-plate plate-akagi">#1</span>
+              </div>
+              <div class="bike-stats">
+                <div class="stat-row"><span>SPEED</span><div class="stat-bar"><i style="width:86%"></i></div></div>
+                <div class="stat-row"><span>ACCEL</span><div class="stat-bar"><i style="width:88%"></i></div></div>
+                <div class="stat-row"><span>LEAN</span><div class="stat-bar"><i style="width:93%"></i></div></div>
+                <div class="stat-row"><span>BRAKE</span><div class="stat-bar"><i style="width:90%"></i></div></div>
+                <div class="stat-row"><span>GRIP</span><div class="stat-bar"><i style="width:95%"></i></div></div>
+              </div>
+            </article>
+
+            <article class="bike-card" data-player="1" data-bike-id="shiden" tabindex="0">
+              <div class="bike-livery-bar" style="background: linear-gradient(90deg, #1648b8 0%, #1648b8 65%, #f5c542 65%, #f5c542 85%, #ffffff 85%);"></div>
+              <div class="bike-card-top">
+                <div>
+                  <h3 class="bike-name">Shiden NSR-V #4</h3>
+                  <span class="bike-team">Factory Blue Gold</span>
+                </div>
+                <span class="race-plate plate-shiden">#4</span>
+              </div>
+              <div class="bike-stats">
+                <div class="stat-row"><span>SPEED</span><div class="stat-bar"><i style="width:98%"></i></div></div>
+                <div class="stat-row"><span>ACCEL</span><div class="stat-bar"><i style="width:96%"></i></div></div>
+                <div class="stat-row"><span>LEAN</span><div class="stat-bar"><i style="width:82%"></i></div></div>
+                <div class="stat-row"><span>BRAKE</span><div class="stat-bar"><i style="width:84%"></i></div></div>
+                <div class="stat-row"><span>GRIP</span><div class="stat-bar"><i style="width:85%"></i></div></div>
+              </div>
+            </article>
+
+            <article class="bike-card" data-player="1" data-bike-id="kaze" tabindex="0">
+              <div class="bike-livery-bar" style="background: linear-gradient(90deg, #00a8e8 0%, #00a8e8 65%, #e62222 65%, #e62222 85%, #ffffff 85%);"></div>
+              <div class="bike-card-top">
+                <div>
+                  <h3 class="bike-name">Kaze RGV-500 #34</h3>
+                  <span class="bike-team">Striker Cyan Red</span>
+                </div>
+                <span class="race-plate plate-kaze">#34</span>
+              </div>
+              <div class="bike-stats">
+                <div class="stat-row"><span>SPEED</span><div class="stat-bar"><i style="width:80%"></i></div></div>
+                <div class="stat-row"><span>ACCEL</span><div class="stat-bar"><i style="width:85%"></i></div></div>
+                <div class="stat-row"><span>LEAN</span><div class="stat-bar"><i style="width:99%"></i></div></div>
+                <div class="stat-row"><span>BRAKE</span><div class="stat-bar"><i style="width:98%"></i></div></div>
+                <div class="stat-row"><span>GRIP</span><div class="stat-bar"><i style="width:92%"></i></div></div>
+              </div>
+            </article>
+
+            <article class="bike-card" data-player="1" data-bike-id="corsa" tabindex="0">
+              <div class="bike-livery-bar" style="background: linear-gradient(90deg, #b80f1a 0%, #b80f1a 65%, #181818 65%, #181818 85%, #f0d040 85%);"></div>
+              <div class="bike-card-top">
+                <div>
+                  <h3 class="bike-name">Corsa 500 Italia #27</h3>
+                  <span class="bike-team">Scuderia Corsa</span>
+                </div>
+                <span class="race-plate plate-corsa">#27</span>
+              </div>
+              <div class="bike-stats">
+                <div class="stat-row"><span>SPEED</span><div class="stat-bar"><i style="width:92%"></i></div></div>
+                <div class="stat-row"><span>ACCEL</span><div class="stat-bar"><i style="width:92%"></i></div></div>
+                <div class="stat-row"><span>LEAN</span><div class="stat-bar"><i style="width:88%"></i></div></div>
+                <div class="stat-row"><span>BRAKE</span><div class="stat-bar"><i style="width:90%"></i></div></div>
+                <div class="stat-row"><span>GRIP</span><div class="stat-bar"><i style="width:89%"></i></div></div>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <!-- Player 2 Bay -->
+        <div id="p2-garage" class="garage-bay bay-p2">
+          <div class="bay-header">
+            <div class="bay-title-group">
+              <span class="player-badge p2-badge">P2</span>
+              <div>
+                <h2 id="p2-garage-title" class="bay-title">PLAYER 2 MACHINE</h2>
+                <span id="p2-garage-sub" class="bay-sub">500cc V4 TWO-STROKE FACTORY ENTRY</span>
+              </div>
+            </div>
+            <div class="control-legend">
+              <div class="legend-keys">
+                <span class="keycap">↑</span><span class="keycap">↓</span> Throttle/Brake ·
+                <span class="keycap">←</span><span class="keycap">→</span> Lean ·
+                <span class="keycap">Enter</span> / <span class="keycap">Num0</span> Tuck-In
+              </div>
+              <div id="p2-gamepad-badge" class="gamepad-badge">Gamepad 2: Standby (Arrows + Enter)</div>
+            </div>
+          </div>
+
+          <div id="p2-bike-cards" class="bike-cards-grid" role="radiogroup" aria-label="Player 2 Bike Selection">
+            <article class="bike-card" data-player="2" data-bike-id="akagi" tabindex="0">
+              <div class="bike-livery-bar" style="background: linear-gradient(90deg, #d91424 0%, #d91424 65%, #ffffff 65%, #ffffff 85%, #151515 85%);"></div>
+              <div class="bike-card-top">
+                <div>
+                  <h3 class="bike-name">Akagi V4-500 #1</h3>
+                  <span class="bike-team">Apex Red Racing</span>
+                </div>
+                <span class="race-plate plate-akagi">#1</span>
+              </div>
+              <div class="bike-stats">
+                <div class="stat-row"><span>SPEED</span><div class="stat-bar"><i style="width:86%"></i></div></div>
+                <div class="stat-row"><span>ACCEL</span><div class="stat-bar"><i style="width:88%"></i></div></div>
+                <div class="stat-row"><span>LEAN</span><div class="stat-bar"><i style="width:93%"></i></div></div>
+                <div class="stat-row"><span>BRAKE</span><div class="stat-bar"><i style="width:90%"></i></div></div>
+                <div class="stat-row"><span>GRIP</span><div class="stat-bar"><i style="width:95%"></i></div></div>
+              </div>
+            </article>
+
+            <article class="bike-card selected" data-player="2" data-bike-id="shiden" tabindex="0">
+              <div class="bike-livery-bar" style="background: linear-gradient(90deg, #1648b8 0%, #1648b8 65%, #f5c542 65%, #f5c542 85%, #ffffff 85%);"></div>
+              <div class="bike-card-top">
+                <div>
+                  <h3 class="bike-name">Shiden NSR-V #4</h3>
+                  <span class="bike-team">Factory Blue Gold</span>
+                </div>
+                <span class="race-plate plate-shiden">#4</span>
+              </div>
+              <div class="bike-stats">
+                <div class="stat-row"><span>SPEED</span><div class="stat-bar"><i style="width:98%"></i></div></div>
+                <div class="stat-row"><span>ACCEL</span><div class="stat-bar"><i style="width:96%"></i></div></div>
+                <div class="stat-row"><span>LEAN</span><div class="stat-bar"><i style="width:82%"></i></div></div>
+                <div class="stat-row"><span>BRAKE</span><div class="stat-bar"><i style="width:84%"></i></div></div>
+                <div class="stat-row"><span>GRIP</span><div class="stat-bar"><i style="width:85%"></i></div></div>
+              </div>
+            </article>
+
+            <article class="bike-card" data-player="2" data-bike-id="kaze" tabindex="0">
+              <div class="bike-livery-bar" style="background: linear-gradient(90deg, #00a8e8 0%, #00a8e8 65%, #e62222 65%, #e62222 85%, #ffffff 85%);"></div>
+              <div class="bike-card-top">
+                <div>
+                  <h3 class="bike-name">Kaze RGV-500 #34</h3>
+                  <span class="bike-team">Striker Cyan Red</span>
+                </div>
+                <span class="race-plate plate-kaze">#34</span>
+              </div>
+              <div class="bike-stats">
+                <div class="stat-row"><span>SPEED</span><div class="stat-bar"><i style="width:80%"></i></div></div>
+                <div class="stat-row"><span>ACCEL</span><div class="stat-bar"><i style="width:85%"></i></div></div>
+                <div class="stat-row"><span>LEAN</span><div class="stat-bar"><i style="width:99%"></i></div></div>
+                <div class="stat-row"><span>BRAKE</span><div class="stat-bar"><i style="width:98%"></i></div></div>
+                <div class="stat-row"><span>GRIP</span><div class="stat-bar"><i style="width:92%"></i></div></div>
+              </div>
+            </article>
+
+            <article class="bike-card" data-player="2" data-bike-id="corsa" tabindex="0">
+              <div class="bike-livery-bar" style="background: linear-gradient(90deg, #b80f1a 0%, #b80f1a 65%, #181818 65%, #181818 85%, #f0d040 85%);"></div>
+              <div class="bike-card-top">
+                <div>
+                  <h3 class="bike-name">Corsa 500 Italia #27</h3>
+                  <span class="bike-team">Scuderia Corsa</span>
+                </div>
+                <span class="race-plate plate-corsa">#27</span>
+              </div>
+              <div class="bike-stats">
+                <div class="stat-row"><span>SPEED</span><div class="stat-bar"><i style="width:92%"></i></div></div>
+                <div class="stat-row"><span>ACCEL</span><div class="stat-bar"><i style="width:92%"></i></div></div>
+                <div class="stat-row"><span>LEAN</span><div class="stat-bar"><i style="width:88%"></i></div></div>
+                <div class="stat-row"><span>BRAKE</span><div class="stat-bar"><i style="width:90%"></i></div></div>
+                <div class="stat-row"><span>GRIP</span><div class="stat-bar"><i style="width:89%"></i></div></div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </div>
+
+      <!-- Launch Deck -->
+      <footer class="paddock-footer">
+        <div class="physics-note">
+          <span class="note-tag">120Hz FRENET SIMCADE</span>
+          <span>Lean angle governs turn radius (tan θ = v² / g·r). Watch rear slip in the 8,500–12,500 RPM 2-stroke powerband!</span>
+        </div>
+        <button id="btn-start-race" type="button" class="btn-launch-gp">
+          START GRAND PRIX
+        </button>
+      </footer>
+    </div>
+  </section>
+
+  <!-- =====================================================================
+       SPLIT-SCREEN RACE HUD
+       ===================================================================== -->
+  <section id="race-hud" class="hud-layer hidden" data-split="horizontal" aria-label="Race Telemetry HUD">
+    <!-- Player 1 Viewport HUD -->
+    <div id="hud-p1" class="player-hud hud-p1">
+      <!-- Top-Left Timing & Position Chyron -->
+      <div class="timing-chyron">
+        <div class="chyron-header">
+          <span class="player-badge p1-badge">P1</span>
+          <span id="p1-bike-tag" class="chyron-bike">Akagi V4-500 #1</span>
+        </div>
+        <div class="chyron-main">
+          <div class="pos-box">
+            <span class="pos-label">POS</span>
+            <span id="p1-pos" class="pos-value">1st</span>
+            <span id="p1-pos-total" class="pos-total">/ 8</span>
+          </div>
+          <div class="lap-box">
+            <span id="p1-lap" class="lap-counter">LAP 1/3</span>
+            <div class="lap-times">
+              <div class="time-row"><span>CUR</span><strong id="p1-cur-lap">00:00.000</strong></div>
+              <div class="time-row"><span>BEST</span><strong id="p1-best-lap">--:--.---</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dynamic Simcade Status Badges -->
+      <div class="status-badges-rack">
+        <span id="p1-badge-powerslide" class="telemetry-badge badge-powerslide">POWERSLIDE</span>
+        <span id="p1-badge-wheelie" class="telemetry-badge badge-wheelie">WHEELIE</span>
+        <span id="p1-badge-slipstream" class="telemetry-badge badge-slipstream">SLIPSTREAM</span>
+        <span id="p1-badge-gravel" class="telemetry-badge badge-gravel">GRAVEL</span>
+        <span id="p1-badge-highside" class="telemetry-badge badge-highside">HIGHSIDE!</span>
+        <span id="p1-badge-tuck" class="telemetry-badge badge-tuck">AERO TUCK</span>
+      </div>
+
+      <!-- Bottom-Right 1990 Stack Telemetry Cluster -->
+      <div class="cockpit-cluster">
+        <!-- RPM Tachometer (4,000 - 13,000 RPM) -->
+        <div class="tachometer-box">
+          <div class="tach-header">
+            <span class="tach-label">RPM ×1000</span>
+            <span id="p1-rpm-val" class="tach-rpm-num">4,000 RPM</span>
+            <span id="p1-shift-lamp" class="shift-lamp">POWERBAND</span>
+          </div>
+          <div class="tach-scale">
+            <span>4</span><span>6</span><span>8</span><span class="pb-mark">9</span><span class="pb-mark">10</span><span class="pb-mark">11</span><span class="pb-mark">12</span><span class="rl-mark">13</span>
+          </div>
+          <div class="tach-bar-track">
+            <div id="p1-rpm-fill" class="tach-bar-fill" style="width: 10%"></div>
+            <div class="tach-powerband-zone" title="2-Stroke Powerband (8,500-12,500 RPM)"></div>
+          </div>
+        </div>
+
+        <!-- Gear, Digital Speed & Lean Angle Gauge -->
+        <div class="cluster-lower">
+          <div class="gear-module">
+            <span class="cluster-sublabel">GEAR</span>
+            <span id="p1-gear" class="gear-digit">1</span>
+          </div>
+
+          <div class="speed-module">
+            <span id="p1-speed" class="speed-digits">0</span>
+            <span class="speed-unit">KM/H</span>
+          </div>
+
+          <div class="lean-module">
+            <div class="lean-top">
+              <span class="cluster-sublabel">LEAN ANGLE</span>
+              <span id="p1-lean-val" class="lean-deg">0°</span>
+            </div>
+            <div class="lean-gauge-track">
+              <div class="lean-center-tick"></div>
+              <div id="p1-lean-needle" class="lean-needle" style="left: 50%"></div>
+            </div>
+            <div class="lean-scale-labels">
+              <span>55°L</span><span>0°</span><span>55°R</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Center Split-Screen Divider Bar & Live 2D Track Minimap -->
+    <div id="split-divider" class="split-divider"></div>
+
+    <div id="minimap-container" class="minimap-dock">
+      <div class="minimap-header">
+        <span id="hud-track-name" class="minimap-title">SAKURA GP</span>
+        <div class="hud-quick-btns">
+          <button id="btn-hud-split" type="button" class="hud-mini-btn" title="Toggle Split Orientation (V)">[V] SPLIT</button>
+          <button id="btn-hud-mute" type="button" class="hud-mini-btn" title="Toggle Mute (M)">[M] SND</button>
+          <button id="btn-hud-pause" type="button" class="hud-mini-btn" title="Pause Race (P / Esc)">[P] PAUSE</button>
+        </div>
+      </div>
+      <canvas id="minimap-canvas" width="168" height="148" aria-label="2D Track Minimap"></canvas>
+    </div>
+
+    <!-- Player 2 Viewport HUD -->
+    <div id="hud-p2" class="player-hud hud-p2">
+      <!-- Top-Left Timing & Position Chyron -->
+      <div class="timing-chyron">
+        <div class="chyron-header">
+          <span class="player-badge p2-badge">P2</span>
+          <span id="p2-bike-tag" class="chyron-bike">Shiden NSR-V #4</span>
+        </div>
+        <div class="chyron-main">
+          <div class="pos-box">
+            <span class="pos-label">POS</span>
+            <span id="p2-pos" class="pos-value">2nd</span>
+            <span id="p2-pos-total" class="pos-total">/ 8</span>
+          </div>
+          <div class="lap-box">
+            <span id="p2-lap" class="lap-counter">LAP 1/3</span>
+            <div class="lap-times">
+              <div class="time-row"><span>CUR</span><strong id="p2-cur-lap">00:00.000</strong></div>
+              <div class="time-row"><span>BEST</span><strong id="p2-best-lap">--:--.---</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dynamic Simcade Status Badges -->
+      <div class="status-badges-rack">
+        <span id="p2-badge-powerslide" class="telemetry-badge badge-powerslide">POWERSLIDE</span>
+        <span id="p2-badge-wheelie" class="telemetry-badge badge-wheelie">WHEELIE</span>
+        <span id="p2-badge-slipstream" class="telemetry-badge badge-slipstream">SLIPSTREAM</span>
+        <span id="p2-badge-gravel" class="telemetry-badge badge-gravel">GRAVEL</span>
+        <span id="p2-badge-highside" class="telemetry-badge badge-highside">HIGHSIDE!</span>
+        <span id="p2-badge-tuck" class="telemetry-badge badge-tuck">AERO TUCK</span>
+      </div>
+
+      <!-- Bottom-Right 1990 Stack Telemetry Cluster -->
+      <div class="cockpit-cluster">
+        <!-- RPM Tachometer (4,000 - 13,000 RPM) -->
+        <div class="tachometer-box">
+          <div class="tach-header">
+            <span class="tach-label">RPM ×1000</span>
+            <span id="p2-rpm-val" class="tach-rpm-num">4,000 RPM</span>
+            <span id="p2-shift-lamp" class="shift-lamp">POWERBAND</span>
+          </div>
+          <div class="tach-scale">
+            <span>4</span><span>6</span><span>8</span><span class="pb-mark">9</span><span class="pb-mark">10</span><span class="pb-mark">11</span><span class="pb-mark">12</span><span class="rl-mark">13</span>
+          </div>
+          <div class="tach-bar-track">
+            <div id="p2-rpm-fill" class="tach-bar-fill" style="width: 10%"></div>
+            <div class="tach-powerband-zone" title="2-Stroke Powerband (8,500-12,500 RPM)"></div>
+          </div>
+        </div>
+
+        <!-- Gear, Digital Speed & Lean Angle Gauge -->
+        <div class="cluster-lower">
+          <div class="gear-module">
+            <span class="cluster-sublabel">GEAR</span>
+            <span id="p2-gear" class="gear-digit">1</span>
+          </div>
+
+          <div class="speed-module">
+            <span id="p2-speed" class="speed-digits">0</span>
+            <span class="speed-unit">KM/H</span>
+          </div>
+
+          <div class="lean-module">
+            <div class="lean-top">
+              <span class="cluster-sublabel">LEAN ANGLE</span>
+              <span id="p2-lean-val" class="lean-deg">0°</span>
+            </div>
+            <div class="lean-gauge-track">
+              <div class="lean-center-tick"></div>
+              <div id="p2-lean-needle" class="lean-needle" style="left: 50%"></div>
+            </div>
+            <div class="lean-scale-labels">
+              <span>55°L</span><span>0°</span><span>55°R</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Start Gantry Countdown Lights Overlay -->
+    <div id="countdown-overlay" class="gantry-overlay hidden">
+      <div class="gantry-housing">
+        <div class="gantry-lamps">
+          <span class="gantry-light" data-light="1"></span>
+          <span class="gantry-light" data-light="2"></span>
+          <span class="gantry-light" data-light="3"></span>
+          <span class="gantry-light" data-light="4"></span>
+          <span class="gantry-light" data-light="5"></span>
+        </div>
+        <div id="countdown-text" class="gantry-banner">PREPARE TO RACE</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =====================================================================
+       PAUSE OVERLAY
+       ===================================================================== -->
+  <section id="pause-overlay" class="modal-overlay hidden" aria-label="Race Paused">
+    <div class="modal-card pause-card">
+      <span class="modal-eyebrow">RACE CONTROL — RED FLAG STANDBY</span>
+      <h2 class="modal-title">RACE PAUSED</h2>
+      <div class="pause-actions">
+        <button id="btn-resume" type="button" class="btn-primary">Resume Race [P / Esc]</button>
+        <button id="btn-pause-split" type="button" class="btn-secondary">Toggle Split Orientation [V]</button>
+        <button id="btn-pause-mute" type="button" class="btn-secondary">Toggle Audio Mute [M]</button>
+        <button id="btn-pause-restart" type="button" class="btn-secondary">Restart Grand Prix</button>
+        <button id="btn-pause-paddock" type="button" class="btn-danger">Back to Paddock</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- =====================================================================
+       POST-RACE PODIUM & STANDINGS OVERLAY
+       ===================================================================== -->
+  <section id="results-overlay" class="modal-overlay hidden" aria-label="Post-Race Standings">
+    <div class="modal-card results-card">
+      <header class="results-header">
+        <div>
+          <span class="modal-eyebrow">OFFICIAL FIM TIMING CLASSIFICATION</span>
+          <h2 id="results-title" class="modal-title">GRAND PRIX FINISH — FINAL STANDINGS</h2>
+        </div>
+        <div id="results-circuit-tag" class="results-circuit-badge">SAKURA GP CIRCUIT</div>
+      </header>
+
+      <!-- Top 3 Podium Showcase -->
+      <div id="podium-cards" class="podium-row"></div>
+
+      <!-- Classification Standings Table -->
+      <div class="standings-table-wrap">
+        <table class="standings-table">
+          <thead>
+            <tr>
+              <th>POS</th>
+              <th>RIDER</th>
+              <th>MACHINE</th>
+              <th>LAPS</th>
+              <th>TOTAL TIME / GAP</th>
+              <th>BEST LAP</th>
+            </tr>
+          </thead>
+          <tbody id="results-tbody"></tbody>
+        </table>
+      </div>
+
+      <footer class="results-actions">
+        <button id="btn-race-again" type="button" class="btn-launch-gp">Race Again</button>
+        <button id="btn-back-paddock" type="button" class="btn-secondary">Back to Paddock</button>
+      </footer>
+    </div>
+  </section>
+
+  <script type="module" src="./game.js"></script>
+</body>
+</html>

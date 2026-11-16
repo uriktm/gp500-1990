@@ -1,0 +1,1410 @@
+/* ==========================================================================
+   500cc GRAND PRIX '90 — LOCAL SPLIT-SCREEN
+   1990 FIM Pit-Wall Telemetry & Stack Cockpit Instrument Design System
+   ========================================================================== */
+
+:root {
+  --bg-tarmac: #090c12;
+  --bg-garage: rgba(12, 16, 24, 0.93);
+  --panel-chassis: #131823;
+  --panel-elevated: #192130;
+  --panel-bezel: #2a354b;
+  --ink-primary: #f3f6fc;
+  --ink-secondary: #b8c3d6;
+  --ink-muted: #7d8b9f;
+  --gp-crimson: #e1192b;
+  --gp-amber: #ffba08;
+  --gp-cyan: #00c4ff;
+  --gp-emerald: #10dc68;
+  --gp-violet: #a855f7;
+  --font-display: 'Barlow Condensed', 'Chakra Petch', 'Arial Narrow', 'Impact', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+  --font-body: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--bg-tarmac);
+  color: var(--ink-primary);
+  font-family: var(--font-body);
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ==========================================================================
+   3D WEBGL RACE CANVAS
+   ========================================================================== */
+
+#race-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  z-index: 1;
+}
+
+/* ==========================================================================
+   PADDOCK MAIN MENU
+   ========================================================================== */
+
+.screen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 20px;
+  background:
+    radial-gradient(circle at 18% 12%, rgba(225, 25, 43, 0.16), transparent 45%),
+    radial-gradient(circle at 82% 85%, rgba(0, 196, 255, 0.14), transparent 45%),
+    linear-gradient(180deg, rgba(9, 12, 18, 0.86) 0%, rgba(9, 12, 18, 0.95) 100%);
+  backdrop-filter: blur(8px);
+}
+
+.paddock-shell {
+  width: min(1420px, 100%);
+  max-height: 97vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-garage);
+  border: 1px solid var(--panel-bezel);
+  border-top: 3px solid var(--gp-crimson);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.78);
+  padding: 14px 18px;
+  overflow-y: auto;
+}
+
+/* Masthead */
+.paddock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--panel-bezel);
+  flex-wrap: wrap;
+}
+
+.masthead-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.checkered-strip {
+  width: 28px;
+  height: 44px;
+  background-color: #111;
+  background-image:
+    linear-gradient(45deg, #fff 25%, transparent 25%),
+    linear-gradient(-45deg, #fff 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #fff 75%),
+    linear-gradient(-45deg, transparent 75%, #fff 75%);
+  background-size: 14px 14px;
+  background-position: 0 0, 0 7px, 7px -7px, -7px 0;
+  border: 1px solid var(--panel-bezel);
+  transform: skewX(-10deg);
+  flex-shrink: 0;
+}
+
+.championship-eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  color: var(--gp-amber);
+  text-transform: uppercase;
+}
+
+.paddock-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.35rem, 2.2vw, 2rem);
+  font-weight: 800;
+  font-style: italic;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-primary);
+  text-shadow: 0 2px 12px rgba(225, 25, 43, 0.35);
+}
+
+.masthead-telemetry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hw-pill {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 5px 10px;
+  background: var(--panel-chassis);
+  border: 1px solid var(--panel-bezel);
+  color: var(--ink-secondary);
+  letter-spacing: 0.05em;
+}
+
+.hw-pill.connected {
+  border-color: var(--gp-emerald);
+  color: var(--gp-emerald);
+}
+
+.util-btn {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 6px 12px;
+  background: var(--panel-elevated);
+  color: var(--ink-primary);
+  border: 1px solid var(--panel-bezel);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.util-btn:hover {
+  border-color: var(--gp-amber);
+  background: #222c40;
+}
+
+/* Race Configuration Grid */
+.race-config-grid {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr 1.45fr 1.25fr;
+  gap: 10px;
+}
+
+.config-card {
+  background: var(--panel-chassis);
+  border: 1px solid var(--panel-bezel);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.config-card-track {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.track-select-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.track-preview-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  background: #0a0e16;
+  border: 1px solid #222d42;
+  padding: 4px 6px;
+  flex-shrink: 0;
+}
+
+.track-meta-tag {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--gp-amber);
+  letter-spacing: 0.06em;
+}
+
+.config-card-dual {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.sub-config {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.config-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+}
+
+.key-hint {
+  color: var(--gp-amber);
+}
+
+.gp-select {
+  width: 100%;
+  background: #0d121b;
+  color: var(--ink-primary);
+  border: 1px solid var(--panel-bezel);
+  padding: 5px 8px;
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gp-select:focus {
+  outline: 1px solid var(--gp-amber);
+}
+
+.Segmented-pills {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.seg-btn {
+  flex: 1;
+  min-width: fit-content;
+  padding: 4px 7px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  background: #0e131d;
+  color: var(--ink-secondary);
+  border: 1px solid #232d40;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.seg-btn:hover {
+  border-color: #46587a;
+  color: #fff;
+}
+
+.seg-btn.active {
+  background: var(--gp-crimson);
+  border-color: #ff4757;
+  color: #fff;
+}
+
+.track-desc {
+  font-size: 0.72rem;
+  color: var(--ink-secondary);
+  line-height: 1.25;
+}
+
+/* Dual Garage Bays */
+.garage-bays {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.garage-bay {
+  background: var(--panel-chassis);
+  border: 1px solid var(--panel-bezel);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.bay-p1 {
+  border-left: 3px solid var(--gp-crimson);
+}
+
+.bay-p2 {
+  border-left: 3px solid var(--gp-cyan);
+}
+
+.bay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #20293a;
+}
+
+.bay-title-group {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.player-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-style: italic;
+  font-size: 0.95rem;
+  padding: 2px 9px;
+  letter-spacing: 0.05em;
+}
+
+.p1-badge {
+  background: var(--gp-crimson);
+  color: #fff;
+}
+
+.p2-badge {
+  background: var(--gp-cyan);
+  color: #061018;
+}
+
+.bay-title {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.bay-sub {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  color: var(--ink-muted);
+}
+
+.control-legend {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.legend-keys {
+  font-size: 0.72rem;
+  color: var(--ink-secondary);
+}
+
+.keycap {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  margin: 0 1px;
+  background: #1e2738;
+  border: 1px solid #3b4b68;
+  border-bottom-width: 2px;
+  color: var(--ink-primary);
+}
+
+.gamepad-badge {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--ink-muted);
+}
+
+.gamepad-badge.active {
+  color: var(--gp-emerald);
+}
+
+/* Bike Selector Cards */
+.bike-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.bike-card {
+  background: #0e131d;
+  border: 1px solid #242f44;
+  padding: 8px 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.bike-card:hover,
+.bike-card:focus-visible {
+  border-color: #566b94;
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.bay-p1 .bike-card.selected {
+  border-color: var(--gp-crimson);
+  background: linear-gradient(180deg, rgba(225, 25, 43, 0.14) 0%, rgba(14, 19, 29, 0.95) 100%);
+  box-shadow: inset 0 0 0 1px var(--gp-crimson);
+}
+
+.bay-p2 .bike-card.selected {
+  border-color: var(--gp-cyan);
+  background: linear-gradient(180deg, rgba(0, 196, 255, 0.14) 0%, rgba(14, 19, 29, 0.95) 100%);
+  box-shadow: inset 0 0 0 1px var(--gp-cyan);
+}
+
+.bike-livery-bar {
+  height: 5px;
+  width: 100%;
+}
+
+.bike-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.bike-name {
+  font-family: var(--font-display);
+  font-size: 0.98rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  color: var(--ink-primary);
+}
+
+.bike-team {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  color: var(--ink-muted);
+}
+
+.race-plate {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 900;
+  font-style: italic;
+  padding: 1px 7px;
+  background: #f5c542;
+  color: #111;
+  border: 1px solid #fff;
+}
+
+.plate-akagi { background: #ffffff; color: #b80f1a; }
+.plate-shiden { background: #f5c542; color: #0e2968; }
+.plate-kaze { background: #00a8e8; color: #ffffff; }
+.plate-corsa { background: #f0d040; color: #181818; }
+
+.bike-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--ink-secondary);
+}
+
+.stat-bar {
+  height: 5px;
+  background: #1b2333;
+  overflow: hidden;
+}
+
+.stat-bar i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--gp-amber), var(--gp-crimson));
+}
+
+.bay-p2 .stat-bar i {
+  background: linear-gradient(90deg, var(--gp-cyan), var(--gp-emerald));
+}
+
+/* Footer Launch Bar */
+.paddock-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 8px;
+  border-top: 1px solid var(--panel-bezel);
+  flex-wrap: wrap;
+}
+
+.physics-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.78rem;
+  color: var(--ink-secondary);
+}
+
+.note-tag {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  background: rgba(255, 186, 8, 0.15);
+  border: 1px solid var(--gp-amber);
+  color: var(--gp-amber);
+}
+
+.btn-launch-gp {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 10px 34px;
+  background: linear-gradient(135deg, #e1192b 0%, #b30c1b 100%);
+  color: #fff;
+  border: 2px solid #ff6b78;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(225, 25, 43, 0.45);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+}
+
+.btn-launch-gp:hover {
+  transform: translateY(-1px) scale(1.01);
+  filter: brightness(1.1);
+  box-shadow: 0 12px 28px rgba(225, 25, 43, 0.65);
+}
+
+/* ==========================================================================
+   SPLIT-SCREEN RACE HUD
+   ========================================================================== */
+
+.hud-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, transparent 64%, rgba(3, 6, 12, 0.38) 100%);
+}
+
+.player-hud {
+  position: absolute;
+  overflow: hidden;
+  padding: 12px 16px;
+  box-shadow: inset 0 0 68px rgba(2, 5, 12, 0.48);
+}
+
+.player-hud::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 54%, transparent 58%, rgba(4, 8, 16, 0.46) 100%),
+    linear-gradient(180deg, rgba(6, 10, 18, 0.24) 0%, transparent 18%, transparent 82%, rgba(6, 10, 18, 0.32) 100%);
+}
+
+/* Horizontal Split (Top P1 / Bottom P2) */
+.hud-layer[data-split="horizontal"] .hud-p1 {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 50%;
+}
+
+.hud-layer[data-split="horizontal"] .hud-p2 {
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 50%;
+}
+
+.hud-layer[data-split="horizontal"] .split-divider {
+  position: absolute;
+  top: calc(50% - 3px);
+  left: 0;
+  right: 0;
+  height: 6px;
+  background:
+    linear-gradient(90deg,
+      var(--gp-crimson) 0%,
+      #ff5263 22%,
+      var(--gp-amber) 50%,
+      #4de1ff 78%,
+      var(--gp-cyan) 100%);
+  border-top: 1px solid rgba(255, 255, 255, 0.38);
+  border-bottom: 1px solid rgba(5, 8, 14, 0.95);
+  box-shadow:
+    0 0 18px rgba(0, 0, 0, 0.95),
+    0 0 10px rgba(255, 186, 8, 0.35);
+}
+
+.hud-layer[data-split="horizontal"] .minimap-dock {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Vertical Split (Left P1 / Right P2) */
+.hud-layer[data-split="vertical"] .hud-p1 {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 50%;
+}
+
+.hud-layer[data-split="vertical"] .hud-p2 {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 50%;
+}
+
+.hud-layer[data-split="vertical"] .split-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(50% - 3px);
+  width: 6px;
+  background:
+    linear-gradient(180deg,
+      var(--gp-crimson) 0%,
+      #ff5263 22%,
+      var(--gp-amber) 50%,
+      #4de1ff 78%,
+      var(--gp-cyan) 100%);
+  border-left: 1px solid rgba(255, 255, 255, 0.38);
+  border-right: 1px solid rgba(5, 8, 14, 0.95);
+  box-shadow:
+    0 0 18px rgba(0, 0, 0, 0.95),
+    0 0 10px rgba(255, 186, 8, 0.35);
+}
+
+.hud-layer[data-split="vertical"] .minimap-dock {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Single Player Fullscreen */
+.hud-layer[data-split="single"] .hud-p1 {
+  inset: 0;
+}
+
+.hud-layer[data-split="single"] .hud-p2,
+.hud-layer[data-split="single"] .split-divider {
+  display: none;
+}
+
+.hud-layer[data-split="single"] .minimap-dock {
+  top: 14px;
+  right: 16px;
+  left: auto;
+  transform: none;
+}
+
+/* Top-Left Timing & Position Chyron */
+.timing-chyron {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  background:
+    linear-gradient(165deg, rgba(16, 22, 34, 0.88) 0%, rgba(9, 13, 21, 0.92) 100%),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.025) 0px, rgba(255, 255, 255, 0.025) 2px, transparent 2px, transparent 4px);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  border: 1px solid rgba(62, 78, 110, 0.78);
+  border-left: 4px solid var(--gp-crimson);
+  padding: 7px 12px;
+  min-width: 235px;
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.68),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.hud-p2 .timing-chyron {
+  border-left-color: var(--gp-cyan);
+}
+
+.chyron-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 5px;
+  margin-bottom: 5px;
+  border-bottom: 1px solid #232e42;
+}
+
+.chyron-bike {
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ink-primary);
+}
+
+.chyron-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.pos-box {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.pos-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--ink-muted);
+  margin-right: 3px;
+}
+
+.pos-value {
+  font-family: var(--font-display);
+  font-size: 1.85rem;
+  font-weight: 900;
+  font-style: italic;
+  color: var(--gp-amber);
+  line-height: 1;
+}
+
+.pos-total {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--ink-secondary);
+}
+
+.lap-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lap-counter {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--ink-primary);
+  letter-spacing: 0.05em;
+}
+
+.lap-times {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink-muted);
+}
+
+.time-row strong {
+  color: var(--ink-primary);
+}
+
+/* Status Warning Badges */
+.status-badges-rack {
+  position: absolute;
+  top: 12px;
+  left: 270px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.telemetry-badge {
+  display: none;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 4px 9px;
+  border: 1px solid currentColor;
+  background: rgba(10, 14, 22, 0.9);
+  text-transform: uppercase;
+}
+
+.telemetry-badge.active {
+  display: inline-block;
+  animation: badgePulse 0.45s ease-in-out infinite alternate;
+}
+
+.badge-powerslide { color: var(--gp-amber); }
+.badge-wheelie { color: #ff7b00; }
+.badge-slipstream { color: var(--gp-cyan); }
+.badge-gravel { color: #e09f3e; }
+.badge-highside { color: var(--gp-crimson); background: rgba(225, 25, 43, 0.25); }
+.badge-tuck { color: var(--gp-emerald); animation: none !important; }
+
+@keyframes badgePulse {
+  from { opacity: 0.78; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1.03); }
+}
+
+/* Bottom-Right 1990 Stack Cockpit Cluster */
+.cockpit-cluster {
+  position: absolute;
+  bottom: 12px;
+  right: 16px;
+  width: 310px;
+  background:
+    linear-gradient(165deg, rgba(16, 22, 34, 0.9) 0%, rgba(8, 12, 20, 0.94) 100%),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.025) 0px, rgba(255, 255, 255, 0.025) 2px, transparent 2px, transparent 4px);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  border: 1px solid rgba(62, 78, 110, 0.82);
+  border-top: 3px solid var(--gp-amber);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.tachometer-box {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tach-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tach-label {
+  color: var(--ink-muted);
+}
+
+.tach-rpm-num {
+  color: var(--ink-primary);
+  font-weight: 700;
+  text-shadow: 0 0 8px rgba(255, 255, 255, 0.25);
+}
+
+.shift-lamp {
+  font-size: 0.62rem;
+  font-weight: 800;
+  padding: 1px 6px;
+  background: #1b2230;
+  color: var(--ink-muted);
+  border: 1px solid #2b364b;
+}
+
+.shift-lamp.powerband {
+  background: rgba(255, 186, 8, 0.22);
+  color: var(--gp-amber);
+  border-color: var(--gp-amber);
+  box-shadow: 0 0 10px rgba(255, 186, 8, 0.45);
+}
+
+.shift-lamp.redline {
+  background: var(--gp-crimson);
+  color: #fff;
+  border-color: #ff858f;
+  box-shadow: 0 0 14px rgba(225, 25, 43, 0.85);
+}
+
+.tach-scale {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--ink-muted);
+}
+
+.tach-scale .pb-mark { color: var(--gp-amber); font-weight: 700; }
+.tach-scale .rl-mark { color: var(--gp-crimson); font-weight: 800; }
+
+.tach-bar-track {
+  position: relative;
+  height: 12px;
+  background: #0d131f;
+  border: 1px solid #2d3c56;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.85);
+  overflow: hidden;
+}
+
+.tach-bar-fill {
+  height: 100%;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      transparent 0px,
+      transparent 5px,
+      rgba(10, 14, 24, 0.72) 5px,
+      rgba(10, 14, 24, 0.72) 7px
+    ),
+    linear-gradient(90deg, #10dc68 0%, #a5f02b 38%, #ffba08 62%, #ff3b1f 86%, #e1192b 100%);
+  box-shadow:
+    0 0 14px rgba(255, 186, 8, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.48);
+  filter: drop-shadow(0 0 6px rgba(225, 25, 43, 0.45));
+  transition: width 0.04s linear;
+}
+
+.tach-powerband-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 44%;
+  border-left: 1px dashed rgba(255, 186, 8, 0.75);
+  border-right: 1px dashed rgba(225, 25, 43, 0.85);
+  pointer-events: none;
+}
+
+.cluster-lower {
+  display: grid;
+  grid-template-columns: 54px 96px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.cluster-sublabel {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--ink-muted);
+  letter-spacing: 0.06em;
+}
+
+.gear-module {
+  background: linear-gradient(180deg, #090d14 0%, #101724 100%);
+  border: 1px solid #2b3852;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8);
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.gear-digit {
+  font-family: var(--font-mono);
+  font-size: 1.55rem;
+  font-weight: 900;
+  color: var(--gp-amber);
+  text-shadow: 0 0 12px rgba(255, 186, 8, 0.55);
+  line-height: 1.05;
+}
+
+.speed-module {
+  background: linear-gradient(180deg, #090d14 0%, #101724 100%);
+  border: 1px solid #2b3852;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8);
+  padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.speed-digits {
+  font-family: var(--font-mono);
+  font-size: 1.55rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-primary);
+  text-shadow: 0 0 10px rgba(0, 196, 255, 0.35);
+  line-height: 1.05;
+}
+
+.speed-unit {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  color: var(--gp-cyan);
+}
+
+.lean-module {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.lean-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.lean-deg {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-primary);
+}
+
+.lean-gauge-track {
+  position: relative;
+  height: 8px;
+  background: #141b28;
+  border: 1px solid #29354b;
+}
+
+.lean-center-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: #63738f;
+}
+
+.lean-needle {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 6px;
+  transform: translateX(-50%);
+  background: var(--gp-amber);
+  border: 1px solid #fff;
+  box-shadow: 0 0 8px rgba(255, 186, 8, 0.8);
+}
+
+.lean-scale-labels {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  color: var(--ink-muted);
+}
+
+/* Shared 2D Track Minimap Dock */
+.minimap-dock {
+  position: absolute;
+  z-index: 15;
+  background:
+    linear-gradient(165deg, rgba(14, 20, 32, 0.92) 0%, rgba(8, 12, 20, 0.95) 100%),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.025) 0px, rgba(255, 255, 255, 0.025) 2px, transparent 2px, transparent 4px);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  border: 1px solid rgba(64, 82, 116, 0.85);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.82),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  pointer-events: auto;
+}
+
+.minimap-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.minimap-title {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--gp-amber);
+  letter-spacing: 0.06em;
+}
+
+.hud-quick-btns {
+  display: flex;
+  gap: 3px;
+}
+
+.hud-mini-btn {
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  padding: 2px 5px;
+  background: #1a2232;
+  color: var(--ink-secondary);
+  border: 1px solid #2e3b54;
+  cursor: pointer;
+}
+
+.hud-mini-btn:hover {
+  color: #fff;
+  border-color: var(--gp-amber);
+}
+
+/* Start Gantry Countdown Lights */
+.gantry-overlay {
+  position: absolute;
+  top: 14%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 18;
+  pointer-events: none;
+}
+
+.gantry-housing {
+  background: rgba(12, 16, 24, 0.95);
+  border: 2px solid #384661;
+  padding: 12px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85);
+}
+
+.gantry-lamps {
+  display: flex;
+  gap: 14px;
+}
+
+.gantry-light {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #221518;
+  border: 2px solid #443238;
+  transition: background 0.1s, box-shadow 0.1s;
+}
+
+.gantry-light.red-lit {
+  background: #ff1e27;
+  border-color: #ff999d;
+  box-shadow: 0 0 18px #ff1e27;
+}
+
+.gantry-light.green-lit {
+  background: #10dc68;
+  border-color: #98f5be;
+  box-shadow: 0 0 20px #10dc68;
+}
+
+.gantry-banner {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.1em;
+  color: var(--ink-primary);
+}
+
+/* ==========================================================================
+   PAUSE & POST-RACE STANDINGS MODALS
+   ========================================================================== */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(7, 10, 16, 0.84);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal-card {
+  background: var(--panel-chassis);
+  border: 1px solid var(--panel-bezel);
+  border-top: 3px solid var(--gp-amber);
+  padding: 22px 26px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.85);
+}
+
+.pause-card {
+  width: min(420px, 100%);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--gp-amber);
+  letter-spacing: 0.14em;
+}
+
+.modal-title {
+  font-family: var(--font-display);
+  font-size: 1.85rem;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.05em;
+}
+
+.pause-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-primary,
+.btn-secondary,
+.btn-danger {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 10px 16px;
+  cursor: pointer;
+  border: 1px solid var(--panel-bezel);
+  transition: all 0.12s ease;
+}
+
+.btn-primary {
+  background: var(--gp-crimson);
+  border-color: #ff5c6a;
+  color: #fff;
+}
+
+.btn-secondary {
+  background: var(--panel-elevated);
+  color: var(--ink-primary);
+}
+
+.btn-secondary:hover {
+  border-color: var(--gp-amber);
+}
+
+.btn-danger {
+  background: #2b1419;
+  border-color: #6e2430;
+  color: #ff858f;
+}
+
+/* Post-Race Standings Card */
+.results-card {
+  width: min(920px, 100%);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+
+.results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--panel-bezel);
+  padding-bottom: 10px;
+}
+
+.results-circuit-badge {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 5px 12px;
+  background: #0e131d;
+  border: 1px solid var(--gp-amber);
+  color: var(--gp-amber);
+}
+
+.podium-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.podium-box {
+  background: #0d121b;
+  border: 1px solid #263248;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.podium-box.pos-1 { border-top: 3px solid #ffd700; }
+.podium-box.pos-2 { border-top: 3px solid #c0c8d8; }
+.podium-box.pos-3 { border-top: 3px solid #cd7f32; }
+
+.podium-place {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 900;
+  font-style: italic;
+  color: var(--gp-amber);
+}
+
+.podium-rider {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.podium-bike {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.standings-table-wrap {
+  overflow-x: auto;
+}
+
+.standings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.standings-table th,
+.standings-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid #1f293a;
+}
+
+.standings-table th {
+  color: var(--ink-muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+}
+
+.standings-table tr.human-row {
+  background: rgba(225, 25, 43, 0.12);
+  font-weight: 700;
+}
+
+.standings-table tr.human-p2-row {
+  background: rgba(0, 196, 255, 0.12);
+  font-weight: 700;
+}
+
+.results-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--panel-bezel);
+}
+
+@media (max-width: 1080px) {
+  .race-config-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .garage-bays {
+    grid-template-columns: 1fr;
+  }
+}
