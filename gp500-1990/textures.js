@@ -59,15 +59,16 @@ function createCanvasSurface(width, height) {
   return { canvas: mockCanvas, ctx: null, width, height, isMock: true };
 }
 
-function wrapInCanvasTexture(canvas, width, height) {
+function wrapInCanvasTexture(canvas, width, height, anisotropy = 8) {
   const TexCtor = THREE.CanvasTexture || THREE.Texture;
   const texture = TexCtor ? new TexCtor(canvas) : { image: canvas };
   texture.image = canvas;
   texture.width = width;
   texture.height = height;
+  texture.colorSpace = THREE.SRGBColorSpace ?? 'srgb';
   texture.wrapS = REPEAT_WRAPPING;
   texture.wrapT = REPEAT_WRAPPING;
-  texture.anisotropy = 4;
+  texture.anisotropy = anisotropy;
   texture.needsUpdate = true;
   return texture;
 }
@@ -91,7 +92,7 @@ function buildAsphaltTexture() {
     const gridN = 32;
     const coarseGrid = new Float32Array(gridN * gridN);
     for (let i = 0; i < coarseGrid.length; i++) {
-      coarseGrid[i] = (rng() - 0.5) * 18;
+      coarseGrid[i] = (rng() - 0.5) * 24;
     }
 
     const sampleCoarse = (x, y) => {
@@ -113,36 +114,35 @@ function buildAsphaltTexture() {
     };
 
     for (let y = 0; y < height; y++) {
-      // Subtle center groove profile along Y as well so any UV orientation shows racing line
-      const dyNorm = (y - height * 0.5) / (height * 0.5);
-      const grooveY = Math.exp(-(dyNorm * dyNorm) / 0.18) * 9;
+      // Subtle longitudinal periodic modulation so forward motion reads clearly at high speed
+      const motionBand = Math.sin((y / height) * Math.PI * 8) * 4.5 + Math.cos((y / height) * Math.PI * 24) * 3.0;
 
       for (let x = 0; x < width; x++) {
         const dxNorm = (x - width * 0.5) / (width * 0.5);
         // Primary darker rubberized racing line groove down the center
-        const grooveX = Math.exp(-(dxNorm * dxNorm) / 0.14) * 20;
+        const grooveX = Math.exp(-(dxNorm * dxNorm) / 0.14) * 22;
         // Dual tire track grooves inside the racing line
-        const leftTrack = Math.exp(-Math.pow(dxNorm + 0.16, 2) / 0.025) * 8;
-        const rightTrack = Math.exp(-Math.pow(dxNorm - 0.16, 2) / 0.025) * 8;
+        const leftTrack = Math.exp(-Math.pow(dxNorm + 0.16, 2) / 0.025) * 9;
+        const rightTrack = Math.exp(-Math.pow(dxNorm - 0.16, 2) / 0.025) * 9;
 
         const patch = sampleCoarse(x, y);
-        const fine = (rng() - 0.5) * 26;
+        const fine = (rng() - 0.5) * 30;
 
         // Multi-scale aggregate speckles: dark basalt pits & bright quartz/mica glints
         const specRoll = rng();
         let aggregateDelta = 0;
-        if (specRoll < 0.075) {
-          aggregateDelta = -22 - rng() * 14; // dark basalt chip
-        } else if (specRoll > 0.955) {
-          aggregateDelta = 24 + rng() * 28; // mica / quartz crystalline highlight
-        } else if (specRoll > 0.86) {
-          aggregateDelta = 12 + rng() * 10; // light granite grain
+        if (specRoll < 0.085) {
+          aggregateDelta = -26 - rng() * 16; // dark basalt chip
+        } else if (specRoll > 0.945) {
+          aggregateDelta = 28 + rng() * 32; // mica / quartz crystalline highlight
+        } else if (specRoll > 0.84) {
+          aggregateDelta = 14 + rng() * 12; // light granite grain
         }
 
-        const base = 76 + patch + fine + aggregateDelta - grooveX - leftTrack - rightTrack - grooveY * 0.35;
+        const base = 78 + patch + fine + aggregateDelta + motionBand - grooveX - leftTrack - rightTrack;
         const r = clampByte(base - 1);
         const g = clampByte(base);
-        const b = clampByte(base + 4);
+        const b = clampByte(base + 3);
 
         const idx = (y * width + x) * 4;
         data[idx] = r;
@@ -153,28 +153,36 @@ function buildAsphaltTexture() {
     }
     ctx.putImageData(imgData, 0, 0);
 
-    // Longitudinal tire-wear rubber streaks down the center racing line
-    for (let i = 0; i < 140; i++) {
+    // Continuous longitudinal tire-wear rubber streaks down the center racing line
+    for (let i = 0; i < 110; i++) {
       const spread = (rng() - 0.5) + (rng() - 0.5); // triangular distribution around center
-      const x = width * 0.5 + spread * width * 0.28;
-      const w = 1.2 + rng() * 3.5;
-      const alpha = 0.04 + rng() * 0.08;
+      const x = width * 0.5 + spread * width * 0.30;
+      const w = 1.2 + rng() * 3.2;
+      const alpha = 0.04 + rng() * 0.07;
       ctx.fillStyle = `rgba(18, 20, 24, ${alpha.toFixed(3)})`;
       ctx.fillRect(x, 0, w, height);
     }
 
-    // Subtle cross-oriented wear streaks so UV-swapped meshes also exhibit directional tire grain
-    for (let i = 0; i < 65; i++) {
-      const spread = (rng() - 0.5) + (rng() - 0.5);
-      const y = height * 0.5 + spread * height * 0.28;
-      const h = 1.0 + rng() * 2.5;
-      const alpha = 0.025 + rng() * 0.045;
-      ctx.fillStyle = `rgba(18, 20, 24, ${alpha.toFixed(3)})`;
-      ctx.fillRect(0, y, width, h);
+    // Tileable finite-length longitudinal rubber & aggregate motion dashes across the road
+    // (gives strong visual forward speed flow as UV.v scrolls past the camera)
+    for (let i = 0; i < 320; i++) {
+      const x = rng() * width;
+      const y = rng() * height;
+      const w = 1.5 + rng() * 4.0;
+      const len = 28 + rng() * 110;
+      const isDarkRubber = rng() < 0.68;
+      const alpha = isDarkRubber ? (0.07 + rng() * 0.14) : (0.05 + rng() * 0.09);
+      ctx.fillStyle = isDarkRubber
+        ? `rgba(16, 18, 22, ${alpha.toFixed(3)})`
+        : `rgba(145, 150, 158, ${alpha.toFixed(3)})`;
+      ctx.fillRect(x, y, w, len);
+      if (y + len > height) {
+        ctx.fillRect(x, 0, w, (y + len) - height);
+      }
     }
 
     // Subtle sealed bitumen micro-cracks in the tarmac
-    ctx.strokeStyle = 'rgba(20, 22, 26, 0.38)';
+    ctx.strokeStyle = 'rgba(20, 22, 26, 0.42)';
     ctx.lineWidth = 1.1;
     for (let c = 0; c < 18; c++) {
       let cx = rng() * width;
@@ -191,7 +199,7 @@ function buildAsphaltTexture() {
     }
   }
 
-  return wrapInCanvasTexture(canvas, width, height);
+  return wrapInCanvasTexture(canvas, width, height, 16);
 }
 
 // ============================================================================

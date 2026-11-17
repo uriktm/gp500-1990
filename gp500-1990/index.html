@@ -3,18 +3,407 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>500cc GRAND PRIX '90 — LOCAL SPLIT-SCREEN</title>
+  <title>500cc GRAND PRIX '90 — TWO-STROKE WORLD CHAMPIONSHIP &amp; 2P SPLIT-SCREEN</title>
+  <script>
+    if (/[?&](autostart|replay)=(1|true)\b/i.test(window.location.search)) {
+      document.documentElement.classList.add('autostart-boot');
+    } else {
+      document.documentElement.classList.add('site-scroll');
+    }
+  </script>
   <link rel="stylesheet" href="./style.css" />
-  <script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+  <script type="importmap">{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}</script>
 </head>
 <body>
-  <!-- Fullscreen 3D WebGL Viewport Canvas -->
+  <!-- Fullscreen 3D WebGL Race Viewport Canvas -->
   <canvas id="race-canvas" aria-label="500cc Grand Prix 3D Race Viewport"></canvas>
+
+  <!-- =====================================================================
+       FIXED TOP BROADCAST NAVIGATION BAR (WEBSITE LANDING)
+       ===================================================================== -->
+  <header id="site-navbar" class="site-navbar" aria-label="Primary Navigation">
+    <a href="#hero-section" class="site-brand">
+      <span class="brand-checkered" aria-hidden="true"></span>
+      <span class="brand-mark">GP500 <span class="brand-slash">//</span> '90</span>
+    </a>
+
+    <nav class="site-nav-links" aria-label="Showcase Sections">
+      <a href="#hero-section" class="site-nav-link active">SHOWCASE</a>
+      <a href="#showroom-section" class="site-nav-link">3D GARAGE</a>
+      <a href="#circuits-section" class="site-nav-link">CIRCUITS</a>
+      <a href="#engineering-section" class="site-nav-link">PHYSICS LAB</a>
+      <a href="#controls-section" class="site-nav-link">2P CONTROLS</a>
+    </nav>
+
+    <div class="site-nav-actions">
+      <button id="btn-site-mute" type="button" class="nav-util-btn" aria-pressed="false" title="Toggle Audio [M]">AUDIO: ON [M]</button>
+      <button id="btn-nav-paddock" type="button" class="nav-secondary-btn">ENTER PADDOCK</button>
+      <button id="btn-nav-quickplay" type="button" class="nav-primary-btn">QUICK 2P RACE</button>
+    </div>
+  </header>
+
+  <!-- =====================================================================
+       SCROLLABLE 1990 FACTORY MOTORSPORT WEBSITE LANDING
+       ===================================================================== -->
+  <main id="site-landing" class="site-landing" aria-label="500cc Grand Prix 1990 Showcase">
+    <!-- 1. HERO WITH INTERACTIVE X-RAY CAD SPOTLIGHT REVEAL -->
+    <section id="hero-section" class="hero-section" style="--spot-x: 64%; --spot-y: 52%;">
+      <div class="hero-media" aria-hidden="true">
+        <div class="hero-photo-layer"></div>
+        <div class="hero-blueprint-layer"></div>
+        <div class="hero-spotlight-reticle">
+          <span class="reticle-label">X-RAY // V4 CAD</span>
+        </div>
+        <div class="hero-scrim"></div>
+      </div>
+
+      <div class="hero-shell">
+        <div class="hero-copy-col">
+          <span class="hero-eyebrow">1990 FIM 500cc WORLD CHAMPIONSHIP · 2P LOCAL SPLIT-SCREEN</span>
+          <h1 class="hero-title">1990:<br /><span class="hero-title-accent">TWO-STROKE</span><br />FURY</h1>
+          <p class="hero-subtitle">
+            Four factory V4 screamers, 120Hz Frenet lean physics, and razor-sharp powerbands from 8,500 to 12,500 RPM. Sweep the spotlight across the tarmac to expose the twin-spar CAD chassis, then drop straight onto the starting grid.
+          </p>
+
+          <div class="hero-cta-row">
+            <button id="btn-hero-quickplay" type="button" class="cta-primary">QUICK 2P RACE</button>
+            <button id="btn-hero-paddock" type="button" class="cta-secondary">ENTER RACE PADDOCK</button>
+            <a id="btn-hero-garage" href="#showroom-section" class="cta-ghost">EXPLORE 3D GARAGE</a>
+          </div>
+        </div>
+
+        <div class="hero-bottom-bar">
+          <div class="hero-telemetry-strip">
+            <div class="tele-cell">
+              <span class="tele-key">SIMULATION</span>
+              <strong class="tele-val">120Hz FRENET · tan θ = v² / g·r</strong>
+            </div>
+            <div class="tele-cell">
+              <span class="tele-key">ACOUSTIC DSP</span>
+              <strong class="tele-val">V4 AUDIOWORKLET · 4 FIRING ORDERS</strong>
+            </div>
+            <div class="tele-cell">
+              <span class="tele-key">BROADCAST</span>
+              <strong class="tele-val">60Hz TV REPLAY · TRACKSIDE CAMS</strong>
+            </div>
+            <div class="tele-cell">
+              <span class="tele-key">MULTIPLAYER</span>
+              <strong class="tele-val">2P SPLIT-SCREEN · KEYBOARD &amp; PADS</strong>
+            </div>
+          </div>
+
+          <div class="hero-xray-hint" aria-hidden="true">
+            <span class="xray-dot"></span>
+            <span>MOVE CURSOR FOR CAD BLUEPRINT REVEAL</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. INTERACTIVE 3D FACTORY SHOWROOM -->
+    <section id="showroom-section" class="site-section showroom-section">
+      <div class="section-container">
+        <header class="section-header reveal-block">
+          <span class="section-eyebrow">LIVE 3D FACTORY GARAGE</span>
+          <h2 class="section-title">1990 500cc WORKS MACHINES</h2>
+          <p class="section-lead">Orbit the turntable, test a 42° knee-down cornering pose, tuck behind the bubble screen, and rev the expansion chambers live.</p>
+        </header>
+
+        <div class="showroom-workbench reveal-block">
+          <!-- 3D Turntable Viewport -->
+          <div class="showroom-stage-card">
+            <canvas id="showroom-canvas" aria-label="Interactive 3D 500cc Grand Prix Motorcycle Showroom"></canvas>
+
+            <div class="stage-overlay-top">
+              <span class="stage-tag">DRAG TO ORBIT 360° · SCROLL TO ZOOM</span>
+              <button id="btn-showroom-reset-cam" type="button" class="stage-mini-btn">RESET VIEW</button>
+            </div>
+
+            <div class="stage-controls-bar">
+              <div class="stage-pose-group">
+                <button id="btn-showroom-lean" type="button" class="pose-btn" aria-pressed="false">LEAN POSE</button>
+                <button id="btn-showroom-tuck" type="button" class="pose-btn" aria-pressed="false">AERO TUCK</button>
+              </div>
+              <button id="btn-showroom-rev" type="button" class="rev-btn">REV V4 ENGINE</button>
+            </div>
+          </div>
+
+          <!-- Technical Spec Sheet & Machine Selector -->
+          <aside class="showroom-specs-card" aria-label="Selected Machine Telemetry">
+            <div id="showroom-bike-tabs" class="bike-tabs-row" role="tablist" aria-label="500cc Works Machines">
+              <button type="button" class="bike-tab-btn active" data-bike-id="akagi" role="tab" aria-selected="true">#1 AKAGI</button>
+              <button type="button" class="bike-tab-btn" data-bike-id="shiden" role="tab" aria-selected="false">#4 SHIDEN</button>
+              <button type="button" class="bike-tab-btn" data-bike-id="kaze" role="tab" aria-selected="false">#34 KAZE</button>
+              <button type="button" class="bike-tab-btn" data-bike-id="corsa" role="tab" aria-selected="false">#27 CORSA</button>
+            </div>
+
+            <div class="showroom-identity">
+              <div>
+                <span id="showroom-bike-team" class="showroom-team-name">Apex Red Racing</span>
+                <h3 id="showroom-bike-name" class="showroom-machine-name">Akagi V4-500</h3>
+                <span id="showroom-timbre-tag" class="showroom-timbre-tag">90° Even-Firing V4 · BASE 110 HZ · RESONATOR 1400 HZ</span>
+              </div>
+              <span id="showroom-bike-number" class="showroom-plate">#1</span>
+            </div>
+
+            <p id="showroom-bike-summary" class="showroom-summary">
+              Razor-sharp corner entry with balanced chassis feedback and explosive midrange powerband drive.
+            </p>
+
+            <dl class="spec-facts-grid">
+              <div class="spec-fact">
+                <dt>ENGINE ARCHITECTURE</dt>
+                <dd id="showroom-bike-engine">499cc V4 2-Stroke · Screamer</dd>
+              </div>
+              <div class="spec-fact">
+                <dt>TOP SPEED</dt>
+                <dd id="showroom-bike-topspeed">304 km/h</dd>
+              </div>
+              <div class="spec-fact">
+                <dt>PEAK OUTPUT</dt>
+                <dd id="showroom-bike-power">162 HP @ 12,200 RPM</dd>
+              </div>
+              <div class="spec-fact">
+                <dt>DRY WEIGHT</dt>
+                <dd id="showroom-bike-weight">130 kg</dd>
+              </div>
+            </dl>
+
+            <div class="showroom-bars">
+              <div class="spec-bar-row">
+                <span>TOP SPEED</span>
+                <div class="spec-bar-track"><i id="showroom-stat-speed" style="width: 86%"></i></div>
+              </div>
+              <div class="spec-bar-row">
+                <span>ACCELERATION</span>
+                <div class="spec-bar-track"><i id="showroom-stat-accel" style="width: 88%"></i></div>
+              </div>
+              <div class="spec-bar-row">
+                <span>LEAN AGILITY</span>
+                <div class="spec-bar-track"><i id="showroom-stat-lean" style="width: 93%"></i></div>
+              </div>
+              <div class="spec-bar-row">
+                <span>CARBON BRAKING</span>
+                <div class="spec-bar-track"><i id="showroom-stat-braking" style="width: 90%"></i></div>
+              </div>
+              <div class="spec-bar-row">
+                <span>EDGE GRIP</span>
+                <div class="spec-bar-track"><i id="showroom-stat-grip" style="width: 95%"></i></div>
+              </div>
+            </div>
+
+            <button id="btn-showroom-race" type="button" class="cta-primary cta-full">RACE THIS MACHINE</button>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. 1990 CHAMPIONSHIP CIRCUITS -->
+    <section id="circuits-section" class="site-section circuits-section">
+      <div class="section-container">
+        <header class="section-header reveal-block">
+          <span class="section-eyebrow">1990 FIM CHAMPIONSHIP CALENDAR</span>
+          <h2 class="section-title">THREE LEGENDARY CIRCUITS</h2>
+          <p class="section-lead">Uniform arc-length 3D Catmull-Rom splines with elevation climbs, downhill S-drops, and wide 14-meter racing asphalt.</p>
+        </header>
+
+        <div class="circuits-grid reveal-block">
+          <div class="circuits-info-panel">
+            <div id="site-circuit-tabs" class="circuit-tabs" role="tablist" aria-label="1990 Championship Circuits">
+              <button type="button" class="circuit-tab-btn active" data-track-id="sakura" role="tab" aria-selected="true">R1 · SAKURA GP</button>
+              <button type="button" class="circuit-tab-btn" data-track-id="monterey" role="tab" aria-selected="false">R2 · MONTEREY RIDGE</button>
+              <button type="button" class="circuit-tab-btn" data-track-id="cathedral" role="tab" aria-selected="false">R3 · CATHEDRAL TT</button>
+            </div>
+
+            <div class="circuit-detail-card">
+              <span id="circuit-country" class="circuit-country-tag">ROUND 1 · JAPAN</span>
+              <h3 id="circuit-name" class="circuit-title">Sakura GP Circuit</h3>
+              <p id="circuit-desc" class="circuit-description">
+                Flowing fast 1990 GP circuit with a long main straight, sweeping high-speed curves, and a tight final chicane.
+              </p>
+
+              <dl class="circuit-metrics">
+                <div class="metric-cell">
+                  <dt>CIRCUIT LENGTH</dt>
+                  <dd id="circuit-length">2.42 km</dd>
+                </div>
+                <div class="metric-cell">
+                  <dt>ELEVATION DELTA</dt>
+                  <dd id="circuit-elevation">9.0 m</dd>
+                </div>
+                <div class="metric-cell">
+                  <dt>TRACK WIDTH</dt>
+                  <dd>14.0 m (+1.6 m kerbs)</dd>
+                </div>
+              </dl>
+
+              <button id="btn-circuit-race" type="button" class="cta-primary">RACE THIS CIRCUIT</button>
+            </div>
+          </div>
+
+          <div class="circuits-canvas-panel">
+            <div class="canvas-panel-head">
+              <span class="canvas-panel-tag">ARC-LENGTH SPLINE &amp; ELEVATION TELEMETRY</span>
+              <span class="canvas-panel-sub">REAL-TIME TRACK GEOMETRY</span>
+            </div>
+            <canvas id="site-circuit-canvas" width="760" height="440" aria-label="Interactive circuit spline and elevation profile"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. 120Hz PHYSICS, V4 DSP AUDIO & TV REPLAY ENGINEERING LAB -->
+    <section id="engineering-section" class="site-section engineering-section">
+      <div class="section-container">
+        <header class="section-header reveal-block">
+          <span class="section-eyebrow">FRENET DYNAMICS · AUDIOWORKLET DSP · BROADCAST REPLAY</span>
+          <h2 class="section-title">ENGINEERING THE TWO-STROKE EDGE</h2>
+          <p class="section-lead">Lean angle governs turn curvature directly through <span class="mono-inline">tan θ = v² / (g·r)</span>, while keeping the V4 between 8,500 and 12,500 RPM unleashes violent rear-wheel drive.</p>
+        </header>
+
+        <div class="engineering-lab reveal-block">
+          <div class="lab-canvas-panel">
+            <div class="canvas-panel-head">
+              <span class="canvas-panel-tag">LIVE 500cc POWERBAND &amp; CORNERING FORCE LAB</span>
+              <span id="sim-status-tag" class="canvas-panel-sub">APEX GRIP OPTIMAL</span>
+            </div>
+            <canvas id="site-physics-canvas" width="700" height="390" aria-label="Interactive 500cc powerband and lean angle diagram"></canvas>
+          </div>
+
+          <div class="lab-controls-card">
+            <div class="slider-group">
+              <div class="slider-header">
+                <label for="sim-speed-slider">CORNER SPEED</label>
+                <output id="sim-speed-val" for="sim-speed-slider">125 km/h</output>
+              </div>
+              <input id="sim-speed-slider" type="range" class="lab-slider" min="30" max="315" value="125" step="1" />
+            </div>
+
+            <div class="slider-group">
+              <div class="slider-header">
+                <label for="sim-radius-slider">APEX RADIUS</label>
+                <output id="sim-radius-val" for="sim-radius-slider">110 m</output>
+              </div>
+              <input id="sim-radius-slider" type="range" class="lab-slider" min="25" max="220" value="110" step="1" />
+            </div>
+
+            <div class="slider-group">
+              <div class="slider-header">
+                <label for="sim-lean-slider">LEAN ANGLE (θ)</label>
+                <output id="sim-lean-val" for="sim-lean-slider">48.2°</output>
+              </div>
+              <input id="sim-lean-slider" type="range" class="lab-slider" min="5" max="55" value="48" step="0.5" />
+            </div>
+
+            <dl class="lab-readouts-grid">
+              <div class="lab-readout">
+                <dt>LATERAL G-LOAD</dt>
+                <dd id="sim-gforce-val">1.07 g</dd>
+              </div>
+              <div class="lab-readout">
+                <dt>EST. ENGINE RPM</dt>
+                <dd id="sim-rpm-val">10,800 RPM</dd>
+              </div>
+              <div class="lab-readout">
+                <dt>POWERBAND SURGE</dt>
+                <dd id="sim-powerband-val">1.00× SURGE</dd>
+              </div>
+            </dl>
+          </div>
+        </div>
+
+        <div class="engineering-highlights reveal-block">
+          <article class="eng-pillar">
+            <span class="pillar-tag">CUSTOM AUDIOWORKLET DSP</span>
+            <h3 class="pillar-title">Cycle-Accurate V4 Two-Stroke Acoustics</h3>
+            <p class="pillar-copy">Synthesizes expansion-chamber resonance, crank firing patterns (Screamer vs. Big-Bang), quickshifter ignition cuts, overrun deceleration crackle, tyre scrub, gravel crunch, and Doppler rival pass-bys.</p>
+          </article>
+
+          <article class="eng-pillar">
+            <span class="pillar-tag">60Hz TELEMETRY &amp; FIM SEASON</span>
+            <h3 class="pillar-title">Trackside TV Replay &amp; 3-Round Championship</h3>
+            <p class="pillar-copy">Every frame captures rider lean, slip, and wheelie state at 60Hz for instant <span class="mono-inline">0.25×–2×</span> slow-motion broadcast replays, feeding directly into a persistent 3-Round 2P Championship (20·17·15·13·11·10·9·8 pts).</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. 2P LOCAL SPLIT-SCREEN CONTROLS & LAUNCH -->
+    <section id="controls-section" class="site-section controls-section">
+      <div class="section-container">
+        <header class="section-header reveal-block">
+          <span class="section-eyebrow">CONFLICT-FREE KEYBOARD &amp; DUAL GAMEPAD API</span>
+          <h2 class="section-title">TWO PLAYERS. ONE SCREEN.</h2>
+          <p class="section-lead">Zero Windows Sticky-Key traps. Race head-to-head on one keyboard, or plug in two controllers with live kerb and powerslide haptic rumble.</p>
+        </header>
+
+        <div class="controls-split-showcase reveal-block">
+          <article class="ctrl-player-card ctrl-p1">
+            <header class="ctrl-card-head">
+              <div class="ctrl-id-group">
+                <span class="player-badge p1-badge">P1</span>
+                <div>
+                  <h3 class="ctrl-card-title">PLAYER 1 COCKPIT</h3>
+                  <span class="ctrl-card-sub">LEFT-HAND KEYBOARD OR GAMEPAD 1</span>
+                </div>
+              </div>
+              <span id="site-pad1-status" class="hw-pill">Gamepad 1: Standby (WASD + Space)</span>
+            </header>
+
+            <div class="ctrl-bindings-list">
+              <div class="ctrl-bind-row"><span>Throttle / Front Brake</span><span><kbd class="keycap">W</kbd> <kbd class="keycap">S</kbd></span></div>
+              <div class="ctrl-bind-row"><span>Countersteer Lean</span><span><kbd class="keycap">A</kbd> <kbd class="keycap">D</kbd></span></div>
+              <div class="ctrl-bind-row"><span>Aero Fairing Tuck</span><span><kbd class="keycap">SPACE</kbd></span></div>
+              <div class="ctrl-bind-row"><span>Cycle Camera (Chase / Far / Helmet)</span><span><kbd class="keycap">C</kbd></span></div>
+              <div class="ctrl-bind-row"><span>Gamepad Mapping</span><span class="mono-inline">L-Stick · RT / LT · X · Y</span></div>
+            </div>
+          </article>
+
+          <article class="ctrl-player-card ctrl-p2">
+            <header class="ctrl-card-head">
+              <div class="ctrl-id-group">
+                <span class="player-badge p2-badge">P2</span>
+                <div>
+                  <h3 class="ctrl-card-title">PLAYER 2 COCKPIT</h3>
+                  <span class="ctrl-card-sub">RIGHT-HAND KEYBOARD OR GAMEPAD 2</span>
+                </div>
+              </div>
+              <span id="site-pad2-status" class="hw-pill">Gamepad 2: Standby (Arrows + Enter)</span>
+            </header>
+
+            <div class="ctrl-bindings-list">
+              <div class="ctrl-bind-row"><span>Throttle / Front Brake</span><span><kbd class="keycap">↑</kbd> <kbd class="keycap">↓</kbd></span></div>
+              <div class="ctrl-bind-row"><span>Countersteer Lean</span><span><kbd class="keycap">←</kbd> <kbd class="keycap">→</kbd></span></div>
+              <div class="ctrl-bind-row"><span>Aero Fairing Tuck</span><span><kbd class="keycap">ENTER</kbd> / <kbd class="keycap">NUM 0</kbd></span></div>
+              <div class="ctrl-bind-row"><span>Cycle Camera (Chase / Far / Helmet)</span><span><kbd class="keycap">.</kbd></span></div>
+              <div class="ctrl-bind-row"><span>Shared Race Shortcuts</span><span><kbd class="keycap">V</kbd> Split · <kbd class="keycap">P</kbd> Pause · <kbd class="keycap">M</kbd> Mute</span></div>
+            </div>
+          </article>
+        </div>
+
+        <div class="controls-launch-footer reveal-block">
+          <div class="launch-footer-copy">
+            <span class="launch-tag">5-LIGHT GANTRY ARMED</span>
+            <h3>CONFIGURE MACHINES OR DROP STRAIGHT TO THE GRID</h3>
+          </div>
+          <div class="launch-footer-actions">
+            <button id="btn-controls-paddock" type="button" class="cta-primary">ENTER RACE PADDOCK</button>
+            <button id="btn-footer-quickplay" type="button" class="cta-secondary">QUICK 2P RACE</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="site-footer">
+      <span>500cc GRAND PRIX '90 · 1990 FIM TWO-STROKE TRIBUTE SIMCADE</span>
+      <span>120Hz FRENET PHYSICS · THREE.JS r170 CLEARCOAT PBR · BLENDER GLB SHOWROOM</span>
+    </footer>
+  </main>
 
   <!-- =====================================================================
        PADDOCK MAIN MENU
        ===================================================================== -->
-  <section id="paddock-menu" class="screen-overlay active" aria-label="Paddock Main Menu">
+  <section id="paddock-menu" class="screen-overlay hidden" aria-label="Paddock Main Menu">
     <div class="paddock-shell">
       <!-- Top Championship Masthead -->
       <header class="paddock-header">
@@ -26,8 +415,9 @@
           </div>
         </div>
         <div class="masthead-telemetry">
-          <div id="menu-pad1-status" class="hw-pill">P1: WASD + SPACE</div>
-          <div id="menu-pad2-status" class="hw-pill">P2: ARROWS + ENTER</div>
+          <div id="menu-pad1-status" class="hw-pill">P1: WASD + SPACE + C</div>
+          <div id="menu-pad2-status" class="hw-pill">P2: ARROWS + ENTER + .</div>
+          <button id="btn-paddock-home" type="button" class="util-btn util-btn-home" title="Return to Website Showcase">← BACK TO WEBSITE</button>
           <button id="btn-menu-mute" type="button" class="util-btn" title="Shortcut: M">AUDIO: ON [M]</button>
         </div>
       </header>
@@ -39,11 +429,13 @@
           <label class="config-label" for="select-mode">RACE FORMAT</label>
           <select id="select-mode" class="gp-select">
             <option value="gp" selected>2P Split-Screen GP (8 Riders)</option>
+            <option value="championship">2P Championship (3 Rounds)</option>
             <option value="duel">2P 1v1 Head-to-Head Duel</option>
             <option value="solo">1P Solo GP Race</option>
           </select>
           <div class="Segmented-pills" data-for="select-mode">
             <button type="button" class="seg-btn active" data-value="gp">2P GP (8 Riders)</button>
+            <button type="button" class="seg-btn" data-value="championship">2P CHAMPIONSHIP</button>
             <button type="button" class="seg-btn" data-value="duel">2P 1v1 Duel</button>
             <button type="button" class="seg-btn" data-value="solo">1P Solo GP</button>
           </div>
@@ -115,6 +507,19 @@
         </div>
       </div>
 
+      <!-- 2P Championship Persistence & Calendar Strip -->
+      <div id="championship-menu-bar" class="championship-banner hidden">
+        <div class="champ-banner-left">
+          <span class="champ-badge">1990 FIM 2P CHAMPIONSHIP</span>
+          <span id="champ-banner-status" class="champ-status-text">3 ROUNDS: R1 SAKURA GP → R2 MONTEREY RIDGE → R3 CATHEDRAL TT (PTS: 20-17-15-13-11-10-9-8)</span>
+        </div>
+        <div class="champ-banner-actions">
+          <button id="btn-resume-championship" type="button" class="btn-champ-action hidden">RESUME CHAMPIONSHIP</button>
+          <button id="btn-view-championship-menu" type="button" class="btn-champ-secondary hidden">STANDINGS</button>
+          <button id="btn-reset-championship" type="button" class="btn-champ-danger hidden">RESET CHAMPIONSHIP</button>
+        </div>
+      </div>
+
       <!-- Dual Factory Garage Bays (Player 1 & Player 2 Bike Selectors) -->
       <div class="garage-bays">
         <!-- Player 1 Bay -->
@@ -131,9 +536,10 @@
               <div class="legend-keys">
                 <span class="keycap">W</span><span class="keycap">S</span> Throttle/Brake ·
                 <span class="keycap">A</span><span class="keycap">D</span> Lean ·
-                <span class="keycap">Space</span> Tuck-In
+                <span class="keycap">Space</span> Tuck ·
+                <span class="keycap">C</span> Cam
               </div>
-              <div id="p1-gamepad-badge" class="gamepad-badge">Gamepad 1: Standby (WASD + Space)</div>
+              <div id="p1-gamepad-badge" class="gamepad-badge">Gamepad 1: Standby (WASD + Space + C)</div>
             </div>
           </div>
 
@@ -226,9 +632,10 @@
               <div class="legend-keys">
                 <span class="keycap">↑</span><span class="keycap">↓</span> Throttle/Brake ·
                 <span class="keycap">←</span><span class="keycap">→</span> Lean ·
-                <span class="keycap">Enter</span> / <span class="keycap">Num0</span> Tuck-In
+                <span class="keycap">Enter</span> Tuck ·
+                <span class="keycap">.</span> Cam
               </div>
-              <div id="p2-gamepad-badge" class="gamepad-badge">Gamepad 2: Standby (Arrows + Enter)</div>
+              <div id="p2-gamepad-badge" class="gamepad-badge">Gamepad 2: Standby (Arrows + Enter + .)</div>
             </div>
           </div>
 
@@ -332,6 +739,7 @@
         <div class="chyron-header">
           <span class="player-badge p1-badge">P1</span>
           <span id="p1-bike-tag" class="chyron-bike">Akagi V4-500 #1</span>
+          <button id="p1-cam-badge" type="button" class="cam-mode-badge" title="Cycle P1 Camera (C or Gamepad Y)">CAM: CHASE [C]</button>
         </div>
         <div class="chyron-main">
           <div class="pos-box">
@@ -428,6 +836,7 @@
         <div class="chyron-header">
           <span class="player-badge p2-badge">P2</span>
           <span id="p2-bike-tag" class="chyron-bike">Shiden NSR-V #4</span>
+          <button id="p2-cam-badge" type="button" class="cam-mode-badge" title="Cycle P2 Camera (. or Gamepad Y)">CAM: CHASE [.]</button>
         </div>
         <div class="chyron-main">
           <div class="pos-box">
@@ -568,10 +977,103 @@
       </div>
 
       <footer class="results-actions">
+        <button id="btn-watch-replay" type="button" class="btn-secondary">WATCH REPLAY</button>
+        <button id="btn-results-championship" type="button" class="btn-primary hidden">CHAMPIONSHIP STANDINGS</button>
         <button id="btn-race-again" type="button" class="btn-launch-gp">Race Again</button>
         <button id="btn-back-paddock" type="button" class="btn-secondary">Back to Paddock</button>
       </footer>
     </div>
+  </section>
+
+  <!-- =====================================================================
+       2P CHAMPIONSHIP STANDINGS & CHAMPION PODIUM OVERLAY
+       ===================================================================== -->
+  <section id="championship-overlay" class="modal-overlay hidden" aria-label="2P Championship Standings">
+    <div class="modal-card results-card championship-card">
+      <header class="results-header">
+        <div>
+          <span id="champ-eyebrow" class="modal-eyebrow">1990 FIM 500cc WORLD CHAMPIONSHIP — POINTS: 20·17·15·13·11·10·9·8</span>
+          <h2 id="champ-title" class="modal-title">CHAMPIONSHIP STANDINGS — ROUND 1 OF 3</h2>
+        </div>
+        <div id="champ-round-badge" class="results-circuit-badge">ROUND 1 / 3</div>
+      </header>
+
+      <!-- Champion / Top-3 Overall Podium Showcase -->
+      <div id="champ-podium-cards" class="podium-row"></div>
+
+      <!-- 3-Round Championship Points Table -->
+      <div class="standings-table-wrap">
+        <table class="standings-table">
+          <thead>
+            <tr>
+              <th>POS</th>
+              <th>RIDER</th>
+              <th>MACHINE</th>
+              <th>R1 SAKURA</th>
+              <th>R2 MONTEREY</th>
+              <th>R3 CATHEDRAL</th>
+              <th>WINS</th>
+              <th>TOTAL PTS</th>
+            </tr>
+          </thead>
+          <tbody id="champ-tbody"></tbody>
+        </table>
+      </div>
+
+      <footer class="results-actions">
+        <button id="btn-champ-watch-replay" type="button" class="btn-secondary">WATCH REPLAY</button>
+        <button id="btn-champ-race-results" type="button" class="btn-secondary">RACE CLASSIFICATION</button>
+        <button id="btn-champ-reset" type="button" class="btn-danger">RESET CHAMPIONSHIP</button>
+        <button id="btn-champ-paddock" type="button" class="btn-secondary">SAVE &amp; PADDOCK</button>
+        <button id="btn-champ-next-round" type="button" class="btn-launch-gp">NEXT ROUND: MONTEREY RIDGE</button>
+      </footer>
+    </div>
+  </section>
+
+  <!-- =====================================================================
+       FULL-SCREEN TV BROADCAST REPLAY OVERLAY
+       ===================================================================== -->
+  <section id="replay-overlay" class="replay-hud hidden" aria-label="Broadcast Replay Controls">
+    <header class="replay-topbar">
+      <div class="replay-brand">
+        <span class="replay-rec-dot"></span>
+        <span class="replay-badge-title">1990 FIM TV REPLAY</span>
+        <span id="replay-cam-pill" class="replay-meta-pill">TRACKSIDE TV CAM</span>
+      </div>
+      <div id="replay-telemetry-banner" class="replay-telemetry">
+        <span id="replay-rider-name" class="replay-rider-tag">Player 1 (#1)</span>
+        <span id="replay-rider-pos" class="replay-stat-item">POS 1st</span>
+        <span id="replay-rider-speed" class="replay-stat-item">0 KM/H</span>
+        <span id="replay-rider-gear" class="replay-stat-item">GEAR 1</span>
+        <span id="replay-rider-lap" class="replay-stat-item">LAP 1</span>
+      </div>
+    </header>
+
+    <footer class="replay-control-bar">
+      <div class="replay-scrub-row">
+        <span id="replay-time-current" class="replay-time-readout">00:00.0</span>
+        <input id="replay-scrub" type="range" class="replay-scrub-slider" min="0" max="1000" value="0" step="1" aria-label="Replay Timeline Scrub Bar" />
+        <span id="replay-time-total" class="replay-time-readout">00:00.0</span>
+      </div>
+
+      <div class="replay-buttons-row">
+        <div class="replay-btn-group">
+          <button id="btn-replay-play" type="button" class="btn-primary replay-ctrl-btn">PAUSE</button>
+          <div class="replay-speed-group" role="group" aria-label="Playback Speed">
+            <button type="button" class="replay-speed-btn" data-speed="0.25">0.25x</button>
+            <button type="button" class="replay-speed-btn" data-speed="0.5">0.5x</button>
+            <button type="button" class="replay-speed-btn active" data-speed="1">1x</button>
+            <button type="button" class="replay-speed-btn" data-speed="2">2x</button>
+          </div>
+        </div>
+
+        <div class="replay-btn-group">
+          <button id="btn-replay-focus" type="button" class="btn-secondary replay-ctrl-btn">FOCUS: P1</button>
+          <button id="btn-replay-cam" type="button" class="btn-secondary replay-ctrl-btn">CAM: TV BROADCAST</button>
+          <button id="btn-replay-exit" type="button" class="btn-danger replay-ctrl-btn">EXIT REPLAY</button>
+        </div>
+      </div>
+    </footer>
   </section>
 
   <script type="module" src="./game.js"></script>

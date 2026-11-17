@@ -1,5 +1,9 @@
 // High-Detail Sculpted 3D Models for 1990 500cc 2-Stroke Grand Prix Motorcycles & Articulated Riders
+// Proportions: 1.40m wheelbase (axles at x = +0.70m and x = -0.70m), 17" wheels (0.60m tire OD, y = 0.30m),
+// ~0.185m wide round-profile rear slick, ~0.78m seat height, ~1.75m rider in crouched GP racing tuck.
+
 import * as THREE from 'three';
+import { createLiverySet } from './livery.js';
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
@@ -22,149 +26,1162 @@ function makeStandardMat(opts = {}) {
   return new THREE.MeshLambertMaterial(opts);
 }
 
-function createTorusTireGeometry(radius, tube, radialSegments = 14, tubularSegments = 28) {
-  if (typeof THREE.TorusGeometry === 'function') {
-    return new THREE.TorusGeometry(radius, tube, radialSegments, tubularSegments);
+// ============================================================================
+// UV & VERTEX SCULPTING UTILITIES
+// ============================================================================
+function computePositionBounds(geo) {
+  const pos = geo?.attributes?.position;
+  if (!pos || !pos.array) {
+    return { minX: -0.5, maxX: 0.5, minY: -0.5, maxY: 0.5, minZ: -0.5, maxZ: 0.5 };
   }
-  return new THREE.CylinderGeometry(radius + tube, radius + tube, tube * 2, tubularSegments);
+  const arr = pos.array;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i < arr.length; i += 3) {
+    const x = arr[i];
+    const y = arr[i + 1];
+    const z = arr[i + 2];
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+  return { minX, maxX, minY, maxY, minZ, maxZ };
 }
 
+function normalizePlanarUVs(geo, mode = 'xy') {
+  const pos = geo?.attributes?.position;
+  if (!pos || !pos.array) return geo;
+  const bounds = computePositionBounds(geo);
+  const spanX = Math.max(1e-5, bounds.maxX - bounds.minX);
+  const spanY = Math.max(1e-5, bounds.maxY - bounds.minY);
+  const spanZ = Math.max(1e-5, bounds.maxZ - bounds.minZ);
+  const count = pos.count ?? pos.array.length / 3;
+  const uvs = new Float32Array(count * 2);
+  const arr = pos.array;
+
+  for (let i = 0; i < count; i++) {
+    const x = arr[i * 3];
+    const y = arr[i * 3 + 1];
+    const z = arr[i * 3 + 2];
+    if (mode === 'tail') {
+      // u across width Z (0 left flank -> 0.5 center -> 1 right flank)
+      // v along length X (0 rear exhaust tip -> 1 front seat bum-stop)
+      uvs[i * 2] = clamp((z - bounds.minZ) / spanZ, 0.01, 0.99);
+      uvs[i * 2 + 1] = clamp((x - bounds.minX) / spanX, 0.01, 0.99);
+    } else {
+      // u along X (0 rear -> 1 front), v along Y (0 bottom -> 1 top)
+      uvs[i * 2] = clamp((x - bounds.minX) / spanX, 0.01, 0.99);
+      uvs[i * 2 + 1] = clamp((y - bounds.minY) / spanY, 0.01, 0.99);
+    }
+  }
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  return geo;
+}
+
+function centerExtrudeZ(geo) {
+  const pos = geo?.attributes?.position;
+  if (!pos || !pos.array) return geo;
+  const bounds = computePositionBounds(geo);
+  const midZ = (bounds.minZ + bounds.maxZ) * 0.5;
+  const arr = pos.array;
+  for (let i = 2; i < arr.length; i += 3) {
+    arr[i] -= midZ;
+  }
+  pos.needsUpdate = true;
+  return geo;
+}
+
+function alignLimbBetween(mesh, pStart, pEnd) {
+  const mx = (pStart.x + pEnd.x) * 0.5;
+  const my = (pStart.y + pEnd.y) * 0.5;
+  const mz = (pStart.z + pEnd.z) * 0.5;
+  mesh.position.set(mx, my, mz);
+
+  const dx = pEnd.x - pStart.x;
+  const dy = pEnd.y - pStart.y;
+  const dz = pEnd.z - pStart.z;
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (len > 1e-5 && typeof THREE.Quaternion === 'function' && typeof THREE.Vector3 === 'function') {
+    const up = new THREE.Vector3(0, 1, 0);
+    // Capsule proximal (+Y) starts at pStart and distal (-Y) ends at pEnd, so +Y points from pEnd -> pStart
+    const dir = new THREE.Vector3(-dx / len, -dy / len, -dz / len);
+    mesh.quaternion.setFromUnitVectors(up, dir);
+  }
+  return mesh;
+}
+
+// ============================================================================
+// CUSTOM SCULPTED GEOMETRY BUILDERS (Shape+Extrude, Lathe, Tube, Capsule)
+// ============================================================================
+
+/**
+ * Builds a realistic 17" GP racing slick tire using LatheGeometry.
+ * Revolving around Y (then rotated so axis is Z):
+ * - Outer radius = outerR (0.30m -> 0.60m OD)
+ * - Rim radius = rimR (0.214m -> 17" rim)
+ * - Width = width (0.186m rear, 0.125m front)
+ */
+function createRacingSlickTireGeometry(outerR = 0.30, rimR = 0.214, width = 0.186, segments = 36) {
+  const hw = width * 0.5;
+  const beadW = hw * 0.84;
+  const crownR = outerR;
+  const shoulderR = outerR - width * 0.14;
+  const midSidewallR = (rimR + shoulderR) * 0.52;
+
+  if (typeof THREE.LatheGeometry === 'function' && typeof THREE.Vector2 === 'function') {
+    const pts = [
+      new THREE.Vector2(rimR - 0.006, -beadW * 0.92),
+      new THREE.Vector2(rimR, -beadW),
+      new THREE.Vector2(midSidewallR, -hw * 0.99),
+      new THREE.Vector2(shoulderR, -hw * 0.95),
+      new THREE.Vector2(outerR - width * 0.055, -hw * 0.72),
+      new THREE.Vector2(outerR - width * 0.015, -hw * 0.38),
+      new THREE.Vector2(crownR, 0.0),
+      new THREE.Vector2(outerR - width * 0.015, hw * 0.38),
+      new THREE.Vector2(outerR - width * 0.055, hw * 0.72),
+      new THREE.Vector2(shoulderR, hw * 0.95),
+      new THREE.Vector2(midSidewallR, hw * 0.99),
+      new THREE.Vector2(rimR, beadW),
+      new THREE.Vector2(rimR - 0.006, beadW * 0.92),
+      new THREE.Vector2(rimR - 0.006, -beadW * 0.92)
+    ];
+    const geo = new THREE.LatheGeometry(pts, segments);
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.CylinderGeometry(outerR, outerR, width, segments);
+}
+
+/**
+ * Deep-dish 17" cast magnesium wheel rim barrel (LatheGeometry).
+ */
+function createWheelRimLatheGeometry(rimR = 0.214, width = 0.155, segments = 24) {
+  const hw = width * 0.5;
+  if (typeof THREE.LatheGeometry === 'function' && typeof THREE.Vector2 === 'function') {
+    const pts = [
+      new THREE.Vector2(rimR, -hw),
+      new THREE.Vector2(rimR - 0.018, -hw * 0.82),
+      new THREE.Vector2(rimR - 0.022, 0),
+      new THREE.Vector2(rimR - 0.018, hw * 0.82),
+      new THREE.Vector2(rimR, hw)
+    ];
+    const geo = new THREE.LatheGeometry(pts, segments);
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.CylinderGeometry(rimR, rimR, width, segments);
+}
+
+/**
+ * Aerodynamic 1990 500cc GP nose cone (LatheGeometry with smooth ogive profile).
+ */
 function createNoseLatheGeometry() {
   if (typeof THREE.LatheGeometry === 'function' && typeof THREE.Vector2 === 'function') {
     const pts = [
-      new THREE.Vector2(0.01, 0.34),
-      new THREE.Vector2(0.065, 0.31),
-      new THREE.Vector2(0.125, 0.23),
-      new THREE.Vector2(0.168, 0.11),
-      new THREE.Vector2(0.192, -0.02),
-      new THREE.Vector2(0.198, -0.16)
+      new THREE.Vector2(0.008, 0.36),
+      new THREE.Vector2(0.055, 0.33),
+      new THREE.Vector2(0.115, 0.25),
+      new THREE.Vector2(0.162, 0.14),
+      new THREE.Vector2(0.190, 0.01),
+      new THREE.Vector2(0.204, -0.14),
+      new THREE.Vector2(0.196, -0.24)
     ];
-    return new THREE.LatheGeometry(pts, 18);
+    const geo = new THREE.LatheGeometry(pts, 24);
+    // Slightly flatten bottom & widen sides for authentic 1990 GP upper fairing cowl
+    const pos = geo.attributes?.position;
+    if (pos && pos.array) {
+      const arr = pos.array;
+      for (let i = 0; i < arr.length; i += 3) {
+        // After rotation.z = -PI/2, local X becomes -Y (vertical), local Z stays Z (lateral)
+        arr[i] *= 0.78;
+        arr[i + 2] *= 1.15;
+      }
+      pos.needsUpdate = true;
+    }
+    geo.computeVertexNormals();
+    normalizePlanarUVs(geo, 'xy');
+    return geo;
   }
   return new THREE.CylinderGeometry(0.04, 0.2, 0.48, 16);
 }
 
-function isTorusInXZPlane(geo) {
-  const pos = geo && geo.attributes && geo.attributes.position;
-  if (!pos || !pos.array || pos.array.length < 9) return false;
-  let maxY = 0;
-  let maxZ = 0;
-  const arr = pos.array;
-  for (let i = 0; i < arr.length; i += 3) {
-    const ay = Math.abs(arr[i + 1]);
-    const az = Math.abs(arr[i + 2]);
-    if (ay > maxY) maxY = ay;
-    if (az > maxZ) maxZ = az;
+/**
+ * Sculpted Side Fairing Panel using THREE.Shape side profile + ExtrudeGeometry with bevel.
+ */
+function createSideFairingExtrudeGeometry() {
+  if (typeof THREE.Shape === 'function' && typeof THREE.ExtrudeGeometry === 'function') {
+    const shape = new THREE.Shape();
+    // Side profile in XY (X forward, Y up)
+    shape.moveTo(-0.18, 0.22); // Rear lower belly pan corner ahead of rear tire
+    shape.quadraticCurveTo(0.12, 0.18, 0.42, 0.23); // Lower belly pan keel
+    shape.quadraticCurveTo(0.55, 0.27, 0.56, 0.44); // Forward lower chin curve
+    shape.quadraticCurveTo(0.45, 0.58, 0.62, 0.68); // Upper fairing wing below nose
+    shape.quadraticCurveTo(0.42, 0.74, 0.22, 0.68); // Fairing top edge under fuel tank
+    shape.quadraticCurveTo(0.06, 0.54, -0.08, 0.46); // Cutout around rider knee / frame spar
+    shape.quadraticCurveTo(-0.19, 0.36, -0.18, 0.22);
+
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: 0.045,
+      steps: 1,
+      curveSegments: 8,
+      bevelEnabled: true,
+      bevelThickness: 0.036,
+      bevelSize: 0.032,
+      bevelSegments: 4
+    });
+    centerExtrudeZ(geo);
+
+    // Sculpt organic 3D curvature: tuck lower belly pan inward and flare mid-fairing outward
+    const pos = geo.attributes?.position;
+    if (pos && pos.array) {
+      const arr = pos.array;
+      for (let i = 0; i < arr.length; i += 3) {
+        const x = arr[i];
+        const y = arr[i + 1];
+        const bellyTuck = clamp((0.36 - y) * 0.22, 0, 0.06);
+        const midBulge = Math.sin(clamp((y - 0.20) / 0.52, 0, 1) * Math.PI) * 0.025;
+        const noseTaper = clamp((x - 0.35) * 0.16, 0, 0.05);
+        arr[i + 2] += midBulge - bellyTuck - noseTaper;
+      }
+      pos.needsUpdate = true;
+    }
+
+    normalizePlanarUVs(geo, 'xy');
+    geo.computeVertexNormals();
+    return geo;
   }
-  return maxZ > maxY * 1.25;
+  return new THREE.SphereGeometry(0.32, 18, 14);
 }
 
+/**
+ * Sculpted 1990 GP Fuel Tank using THREE.Shape side profile + ExtrudeGeometry with wide bevels
+ * and concave knee indents on the rear flanks.
+ */
+function createFuelTankExtrudeGeometry() {
+  if (typeof THREE.Shape === 'function' && typeof THREE.ExtrudeGeometry === 'function') {
+    const shape = new THREE.Shape();
+    shape.moveTo(-0.14, 0.70); // Rear base at front of seat
+    shape.quadraticCurveTo(-0.10, 0.85, 0.04, 0.90); // Rear tank slope where rider chest tucks
+    shape.quadraticCurveTo(0.18, 0.93, 0.32, 0.86); // Top tank crown
+    shape.quadraticCurveTo(0.38, 0.80, 0.35, 0.69); // Front edge near steering head
+    shape.quadraticCurveTo(0.12, 0.66, -0.14, 0.70); // Bottom edge along frame spars
+
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: 0.19,
+      steps: 2,
+      curveSegments: 8,
+      bevelEnabled: true,
+      bevelThickness: 0.068,
+      bevelSize: 0.052,
+      bevelSegments: 4
+    });
+    centerExtrudeZ(geo);
+
+    // Sculpt knee indents at rear-lower tank sides so rider thighs hug the tank seamlessly
+    const pos = geo.attributes?.position;
+    if (pos && pos.array) {
+      const arr = pos.array;
+      for (let i = 0; i < arr.length; i += 3) {
+        const x = arr[i];
+        const y = arr[i + 1];
+        const z = arr[i + 2];
+        // Knee indent zone: x in [-0.14, 0.12], y in [0.68, 0.82]
+        const kx = clamp(1.0 - Math.abs(x + 0.02) / 0.16, 0, 1);
+        const ky = clamp(1.0 - Math.abs(y - 0.74) / 0.09, 0, 1);
+        const indent = kx * ky * 0.24;
+        // Dome top crown
+        const topDome = clamp((y - 0.82) / 0.12, 0, 1) * (1.0 - (z * z) / 0.04) * 0.025;
+        arr[i + 2] = z * (1.0 - indent);
+        arr[i + 1] = y + Math.max(0, topDome);
+      }
+      pos.needsUpdate = true;
+    }
+
+    normalizePlanarUVs(geo, 'xy');
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.SphereGeometry(0.24, 18, 14);
+}
+
+/**
+ * Sculpted 1990 GP Tail Cowl / Seat Unit using THREE.Shape side profile + ExtrudeGeometry with bevels.
+ * Viewed from directly behind (chase cam priority!), forms the signature wide-shouldered 1990s GP
+ * aerodynamic tail section tapering over the twin under-tail exhaust stingers.
+ */
+function createTailCowlExtrudeGeometry() {
+  if (typeof THREE.Shape === 'function' && typeof THREE.ExtrudeGeometry === 'function') {
+    const shape = new THREE.Shape();
+    // Side profile from x = -0.22 (behind rider hips) back to x = -0.85 (rear tail tip)
+    shape.moveTo(-0.22, 0.71);
+    shape.lineTo(-0.26, 0.84); // Angled bum-stop backrest behind rider hips
+    shape.quadraticCurveTo(-0.44, 0.89, -0.64, 0.84); // Rounded upper aero tail hump
+    shape.quadraticCurveTo(-0.79, 0.80, -0.85, 0.72); // Tapered rear tail tip above exhaust stingers
+    shape.lineTo(-0.80, 0.65); // Recessed lower rear lip framing under-tail stingers
+    shape.quadraticCurveTo(-0.56, 0.64, -0.34, 0.67); // Lower tail edge above rear wheel
+    shape.closePath();
+
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: 0.24,
+      steps: 3,
+      curveSegments: 8,
+      bevelEnabled: true,
+      bevelThickness: 0.065,
+      bevelSize: 0.048,
+      bevelSegments: 4
+    });
+    centerExtrudeZ(geo);
+
+    // Sculpt 3D rear taper and rounded upper arch so from directly behind it looks like a real GP tail unit
+    const pos = geo.attributes?.position;
+    if (pos && pos.array) {
+      const arr = pos.array;
+      for (let i = 0; i < arr.length; i += 3) {
+        const x = arr[i];
+        const y = arr[i + 1];
+        const z = arr[i + 2];
+        // Longitudinal progress from front (-0.22) to rear tip (-0.85)
+        const rearT = clamp((-0.22 - x) / 0.64, 0, 1);
+        // Taper width smoothly toward the rear tip, widest around rider hips / number plates
+        const widthScale = 1.04 - rearT * rearT * 0.36;
+        const zNew = z * widthScale;
+        // Arch the top surface so the centerline is higher than the outer flanks (classic GP tail cross-section)
+        const zNorm = clamp(Math.abs(zNew) / 0.18, 0, 1);
+        const archDrop = zNorm * zNorm * 0.048 * clamp((y - 0.66) / 0.20, 0, 1);
+        arr[i + 2] = zNew;
+        arr[i + 1] = y - archDrop;
+      }
+      pos.needsUpdate = true;
+    }
+
+    normalizePlanarUVs(geo, 'tail');
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.SphereGeometry(0.22, 16, 12);
+}
+
+/**
+ * Twin-Spar Brushed Aluminum Frame Beam (THREE.Shape + ExtrudeGeometry with bevel).
+ */
+function createFrameSparExtrudeGeometry() {
+  if (typeof THREE.Shape === 'function' && typeof THREE.ExtrudeGeometry === 'function') {
+    const shape = new THREE.Shape();
+    shape.moveTo(-0.18, 0.30); // Swingarm pivot plate bottom
+    shape.lineTo(-0.10, 0.30); // Swingarm pivot plate front
+    shape.quadraticCurveTo(0.02, 0.45, 0.44, 0.66); // Lower spar edge to steering head
+    shape.lineTo(0.46, 0.75); // Steering head top
+    shape.quadraticCurveTo(0.04, 0.56, -0.14, 0.50); // Upper spar edge
+    shape.quadraticCurveTo(-0.19, 0.41, -0.18, 0.30);
+
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: 0.026,
+      steps: 1,
+      bevelEnabled: true,
+      bevelThickness: 0.008,
+      bevelSize: 0.008,
+      bevelSegments: 3
+    });
+    centerExtrudeZ(geo);
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.BoxGeometry(0.68, 0.095, 0.038);
+}
+
+/**
+ * Gullwing Braced Aluminum Swingarm (THREE.Shape + ExtrudeGeometry with bevel).
+ */
+function createSwingarmExtrudeGeometry() {
+  if (typeof THREE.Shape === 'function' && typeof THREE.ExtrudeGeometry === 'function') {
+    const shape = new THREE.Shape();
+    shape.moveTo(-0.73, 0.275); // Rear axle block bottom
+    shape.lineTo(-0.14, 0.315); // Swingarm pivot bottom
+    shape.lineTo(-0.14, 0.385); // Swingarm pivot top
+    shape.lineTo(-0.34, 0.445); // Triangulated top gullwing brace apex
+    shape.lineTo(-0.73, 0.330); // Rear axle block top
+    shape.closePath();
+
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: 0.028,
+      steps: 1,
+      bevelEnabled: true,
+      bevelThickness: 0.007,
+      bevelSize: 0.007,
+      bevelSegments: 3
+    });
+    centerExtrudeZ(geo);
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.BoxGeometry(0.60, 0.075, 0.036);
+}
+
+/**
+ * Continuous Roller Drive Chain Loop (TubeGeometry + closed CatmullRomCurve3)
+ * wrapping around the rear sprocket (x = -0.70, y = 0.30) and countershaft (x = -0.14, y = 0.35).
+ */
+function createDriveChainGeometry() {
+  if (typeof THREE.CatmullRomCurve3 === 'function' && typeof THREE.TubeGeometry === 'function') {
+    const rRear = 0.114;
+    const rFront = 0.048;
+    const pts = [
+      new THREE.Vector3(-0.70, 0.30 + rRear, 0),
+      new THREE.Vector3(-0.42, 0.335 + 0.082, 0),
+      new THREE.Vector3(-0.14, 0.35 + rFront, 0),
+      new THREE.Vector3(-0.09, 0.35, 0),
+      new THREE.Vector3(-0.14, 0.35 - rFront, 0),
+      new THREE.Vector3(-0.42, 0.315 - 0.082, 0),
+      new THREE.Vector3(-0.70, 0.30 - rRear, 0),
+      new THREE.Vector3(-0.785, 0.30 - rRear * 0.68, 0),
+      new THREE.Vector3(-0.815, 0.30, 0),
+      new THREE.Vector3(-0.785, 0.30 + rRear * 0.68, 0)
+    ];
+    const curve = new THREE.CatmullRomCurve3(pts, true);
+    const geo = new THREE.TubeGeometry(curve, 44, 0.011, 6, true);
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.BoxGeometry(0.58, 0.02, 0.02);
+}
+
+/**
+ * 2-Stroke Expansion Chamber Pipe using TubeGeometry + CatmullRomCurve3 with
+ * variable-radius expansion belly shaping (header -> diffuser -> fat belly -> convergent baffle -> stinger).
+ */
+function createExpansionChamberTubeGeometry(side = 1) {
+  if (typeof THREE.CatmullRomCurve3 === 'function' && typeof THREE.TubeGeometry === 'function') {
+    const pts = [
+      new THREE.Vector3(0.28, 0.30, side * 0.068),
+      new THREE.Vector3(0.30, 0.21, side * 0.092),
+      new THREE.Vector3(0.08, 0.19, side * 0.112),
+      new THREE.Vector3(-0.18, 0.21, side * 0.120),
+      new THREE.Vector3(-0.40, 0.29, side * 0.125),
+      new THREE.Vector3(-0.58, 0.40, side * 0.128),
+      new THREE.Vector3(-0.76, 0.52, side * 0.126)
+    ];
+    const curve = new THREE.CatmullRomCurve3(pts, false);
+    const tubularSegments = 32;
+    const radialSegments = 10;
+    const baseRadius = 0.017;
+    const geo = new THREE.TubeGeometry(curve, tubularSegments, baseRadius, radialSegments, false);
+
+    // Modulate cross-section radius along the curve to form a sleek 2-stroke expansion belly
+    const pos = geo.attributes?.position;
+    if (pos && pos.array) {
+      const arr = pos.array;
+      const ringVerts = radialSegments + 1;
+      for (let i = 0; i <= tubularSegments; i++) {
+        const t = i / tubularSegments;
+        const center = curve.getPointAt(t);
+        let scale = 1.0;
+        if (t < 0.18) {
+          scale = 0.92 + (t / 0.18) * 0.33;
+        } else if (t < 0.48) {
+          scale = 1.25 + ((t - 0.18) / 0.30) * 0.90;
+        } else if (t < 0.62) {
+          scale = 2.15 - ((t - 0.48) / 0.14) * 0.15;
+        } else if (t < 0.78) {
+          scale = 2.00 - ((t - 0.62) / 0.16) * 0.95;
+        } else {
+          scale = 1.22;
+        }
+        for (let j = 0; j < ringVerts; j++) {
+          const idx = (i * ringVerts + j) * 3;
+          arr[idx] = center.x + (arr[idx] - center.x) * scale;
+          arr[idx + 1] = center.y + (arr[idx + 1] - center.y) * scale;
+          arr[idx + 2] = center.z + (arr[idx + 2] - center.z) * scale;
+        }
+      }
+      pos.needsUpdate = true;
+    }
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.CylinderGeometry(0.032, 0.032, 0.7, 12);
+}
+
+/**
+ * Under-Tail V4 Rear-Bank 2-Stroke Exhaust Pipe (TubeGeometry + CatmullRomCurve3).
+ */
+function createUnderTailExhaustGeometry(side = 1) {
+  if (typeof THREE.CatmullRomCurve3 === 'function' && typeof THREE.TubeGeometry === 'function') {
+    const pts = [
+      new THREE.Vector3(0.02, 0.48, side * 0.055),
+      new THREE.Vector3(-0.22, 0.58, side * 0.062),
+      new THREE.Vector3(-0.52, 0.665, side * 0.052),
+      new THREE.Vector3(-0.82, 0.662, side * 0.046)
+    ];
+    const curve = new THREE.CatmullRomCurve3(pts, false);
+    const geo = new THREE.TubeGeometry(curve, 20, 0.021, 10, false);
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.CylinderGeometry(0.021, 0.021, 0.5, 10);
+}
+
+/**
+ * Hollow Exhaust Stinger Tip Nozzle (LatheGeometry with dark inner bore lip).
+ */
+function createStingerNozzleLatheGeometry() {
+  if (typeof THREE.LatheGeometry === 'function' && typeof THREE.Vector2 === 'function') {
+    const pts = [
+      new THREE.Vector2(0.010, -0.016),
+      new THREE.Vector2(0.015, 0.028),
+      new THREE.Vector2(0.019, 0.028),
+      new THREE.Vector2(0.021, -0.028),
+      new THREE.Vector2(0.025, -0.038)
+    ];
+    const geo = new THREE.LatheGeometry(pts, 14);
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.CylinderGeometry(0.018, 0.020, 0.06, 12);
+}
+
+// ============================================================================
+// SCULPTED ANATOMICAL RIDER GEOMETRIES (TORSO+BACK+HUMP, PELVIS, HELMET, LIMBS)
+// ============================================================================
+
+/**
+ * Builds a single continuous, smooth-shaded anatomical Rider Torso + Broad Shoulders +
+ * Integrated Aerodynamic Speed Hump geometry.
+ * UVs are mapped directly across the back (u: left-to-right across Z, v: waist-to-collar along Y)
+ * so livery.leathers (arched brand name, sponsor patches, rider number, shoulder yoke, waist belt)
+ * renders with zero seams from the rear chase camera!
+ */
+function createSculptedRiderTorsoGeometry() {
+  const stacks = 22;
+  const slices = 32;
+  const height = 0.43;
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+
+  for (let i = 0; i <= stacks; i++) {
+    const t = i / stacks; // 0 = waist/belt, 1 = neck collar
+    const y = t * height;
+
+    // Anatomical V-taper width (Z half-width):
+    // Waist ~0.155m -> broad muscular shoulders ~0.218m at t=0.72 -> smooth trapezius taper to collar ~0.105m
+    let halfW;
+    if (t < 0.72) {
+      const s = t / 0.72;
+      halfW = 0.155 + Math.pow(s, 1.25) * 0.063;
+    } else {
+      const s = (t - 0.72) / 0.28;
+      halfW = 0.218 - Math.pow(s, 1.55) * 0.113;
+    }
+
+    // Anatomical chest/back depth (X half-depth)
+    const halfD = 0.108 + Math.sin(t * Math.PI) * 0.030;
+
+    // Forward anatomical spine curve as rider hunches over tank
+    const spineForwardX = Math.sin(t * Math.PI * 0.85) * 0.025;
+
+    // Aerodynamic speed hump profile flowing smoothly up into the collar behind the helmet (t in [0.34, 0.94])
+    const humpT = clamp((t - 0.34) / 0.60, 0, 1);
+    const humpLongitudinal = Math.sin(humpT * Math.PI) * (0.85 + 0.25 * humpT);
+
+    for (let j = 0; j <= slices; j++) {
+      const uFrac = j / slices;
+      // theta = 0 at front (+X), PI at back center (-X)
+      const theta = uFrac * Math.PI * 2;
+      const cosT = Math.cos(theta);
+      const sinT = Math.sin(theta);
+
+      let z = sinT * halfW;
+      let x = cosT * halfD + spineForwardX;
+
+      // Flatten the back slightly and add the 3D aerodynamic speed hump along the spine (cosT < 0)
+      if (cosT < 0) {
+        const backness = -cosT; // 1 at spine centerline
+        const zCenterWeight = Math.exp(-(z * z) / (0.088 * 0.088));
+        const humpOut = backness * zCenterWeight * humpLongitudinal * 0.064;
+        // Muscular shoulder blade / lat contour
+        const latContour = backness * Math.sin(clamp(t / 0.85, 0, 1) * Math.PI) * 0.018;
+        x -= humpOut + latContour;
+      }
+
+      positions.push(x, y, z);
+
+      // Direct planar back projection for UVs so rear chase view is 100% distortion-free
+      const uBack = clamp(0.5 + (z / 0.228) * 0.42, 0.04, 0.96);
+      const vBack = clamp(0.18 + t * 0.78, 0.18, 0.96);
+      uvs.push(uBack, vBack);
+    }
+  }
+
+  const ring = slices + 1;
+  for (let i = 0; i < stacks; i++) {
+    for (let j = 0; j < slices; j++) {
+      const a = i * ring + j;
+      const b = (i + 1) * ring + j;
+      const c = (i + 1) * ring + (j + 1);
+      const d = i * ring + (j + 1);
+      indices.push(a, b, d);
+      indices.push(b, c, d);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(indices);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Sculpted Rider Pelvis / Hips geometry mapped to the lower hip region (v: 0.02..0.20) of livery.leathers.
+ */
+function createSculptedPelvisGeometry() {
+  const geo = new THREE.SphereGeometry(0.168, 20, 14);
+  const pos = geo.attributes?.position;
+  const uv = geo.attributes?.uv;
+  if (pos && pos.array && uv && uv.array) {
+    const pArr = pos.array;
+    const uArr = uv.array;
+    for (let i = 0; i < pArr.length / 3; i++) {
+      const x = pArr[i * 3] * 1.02;
+      const y = pArr[i * 3 + 1] * 0.86;
+      const z = pArr[i * 3 + 2] * 1.15;
+      pArr[i * 3] = x;
+      pArr[i * 3 + 1] = y;
+      pArr[i * 3 + 2] = z;
+
+      uArr[i * 2] = clamp(0.5 + (z / 0.20) * 0.42, 0.05, 0.95);
+      uArr[i * 2 + 1] = clamp(0.02 + ((y + 0.145) / 0.29) * 0.18, 0.02, 0.20);
+    }
+    pos.needsUpdate = true;
+    uv.needsUpdate = true;
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Sculpted Full-Face 1990s GP Helmet using LatheGeometry.
+ * Compact, slightly wider-than-tall GP shell (~0.278m wide x 0.228m tall x 0.325m long).
+ * UV seam is placed at the front (+X, under the dark visor) so u = 0.5 is dead-center on the BACK (-X).
+ */
+function createHelmetLatheGeometry() {
+  if (typeof THREE.LatheGeometry === 'function' && typeof THREE.Vector2 === 'function') {
+    const pts = [
+      new THREE.Vector2(0.094, -0.098), // Neck roll bottom opening
+      new THREE.Vector2(0.124, -0.082), // Rubber neck trim flare
+      new THREE.Vector2(0.140, -0.040), // Lower cheek/jaw shell
+      new THREE.Vector2(0.145, 0.008),  // Visor & temple equator
+      new THREE.Vector2(0.138, 0.056),  // Forehead / upper shell
+      new THREE.Vector2(0.112, 0.096),  // Upper crown curve
+      new THREE.Vector2(0.064, 0.120),  // Top dome
+      new THREE.Vector2(0.001, 0.128)   // Crown apex
+    ];
+    const geo = new THREE.LatheGeometry(pts, 28);
+    const pos = geo.attributes?.position;
+    const uv = geo.attributes?.uv;
+    if (pos && pos.array && uv && uv.array) {
+      const pArr = pos.array;
+      const uArr = uv.array;
+      for (let i = 0; i < pArr.length / 3; i++) {
+        let x = pArr[i * 3];
+        let y = pArr[i * 3 + 1];
+        let z = pArr[i * 3 + 2];
+
+        // Elongate front-to-back (+X chin bar & -X rear aero shell)
+        x *= 1.14;
+        z *= 0.99;
+        if (x > 0.02 && y < 0.0) {
+          x += 0.016 * clamp(-y / 0.10, 0, 1);
+        }
+        // Subtle rear aero spoiler ridge on back of helmet
+        if (x < -0.06 && y > -0.02 && y < 0.07) {
+          x -= 0.012 * (1.0 - Math.abs(y - 0.025) / 0.045);
+        }
+
+        pArr[i * 3] = x;
+        pArr[i * 3 + 1] = y;
+        pArr[i * 3 + 2] = z;
+
+        const angleFromBack = Math.atan2(z, -x);
+        uArr[i * 2] = clamp(0.5 + angleFromBack / (Math.PI * 2), 0.001, 0.999);
+        uArr[i * 2 + 1] = clamp((y + 0.098) / 0.226, 0.01, 0.99);
+      }
+      pos.needsUpdate = true;
+      uv.needsUpdate = true;
+    }
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.SphereGeometry(0.145, 20, 16);
+}
+
+/**
+ * Curved Wrap-Around Helmet Visor (Front arc of cylinder).
+ */
+function createHelmetVisorGeometry() {
+  const geo = new THREE.CylinderGeometry(0.148, 0.152, 0.068, 20, 2, false, -Math.PI * 0.42, Math.PI * 0.84);
+  geo.rotateY(Math.PI * 0.5);
+  const pos = geo.attributes?.position;
+  if (pos && pos.array) {
+    const arr = pos.array;
+    for (let i = 0; i < arr.length; i += 3) {
+      arr[i] *= 1.11;
+      arr[i + 2] *= 0.99;
+    }
+    pos.needsUpdate = true;
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Anatomical Limb Capsule (CapsuleGeometry with fallback for headless mocks).
+ */
+function createLimbCapsuleGeometry(radiusTop, radiusBottom, length, capSegments = 8, radialSegments = 14) {
+  const avgR = (radiusTop + radiusBottom) * 0.5;
+  let geo;
+  if (typeof THREE.CapsuleGeometry === 'function') {
+    geo = new THREE.CapsuleGeometry(avgR, length, capSegments, radialSegments);
+  } else {
+    geo = new THREE.CylinderGeometry(radiusTop, radiusBottom, length + avgR * 2, radialSegments);
+  }
+
+  // Taper from top (proximal joint) to bottom (distal joint)
+  const pos = geo.attributes?.position;
+  if (pos && pos.array && Math.abs(radiusTop - radiusBottom) > 1e-4) {
+    const arr = pos.array;
+    const halfH = length * 0.5 + avgR;
+    for (let i = 0; i < arr.length; i += 3) {
+      const y = arr[i + 1];
+      const t = clamp((y + halfH) / (2 * halfH), 0, 1); // 0 distal, 1 proximal
+      const targetR = radiusBottom + (radiusTop - radiusBottom) * t;
+      const scale = targetR / Math.max(1e-4, avgR);
+      arr[i] *= scale;
+      arr[i + 2] *= scale;
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+  }
+  return geo;
+}
+
+/**
+ * Sculpted Armored GP Racing Boot (THREE.Shape + ExtrudeGeometry with bevel).
+ */
+function createRacingBootGeometry() {
+  if (typeof THREE.Shape === 'function' && typeof THREE.ExtrudeGeometry === 'function') {
+    const shape = new THREE.Shape();
+    shape.moveTo(-0.08, -0.035); // Heel base on footpeg
+    shape.lineTo(0.11, -0.038);  // Sole to toe slider
+    shape.quadraticCurveTo(0.135, -0.015, 0.105, 0.012); // Toe box curve
+    shape.lineTo(0.015, 0.038);  // Instep
+    shape.lineTo(-0.015, 0.115); // Front shin cuff
+    shape.lineTo(-0.085, 0.095); // Rear calf cuff
+    shape.quadraticCurveTo(-0.092, 0.02, -0.08, -0.035); // Achilles & heel cup
+
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: 0.062,
+      steps: 1,
+      bevelEnabled: true,
+      bevelThickness: 0.014,
+      bevelSize: 0.012,
+      bevelSegments: 3
+    });
+    centerExtrudeZ(geo);
+    geo.computeVertexNormals();
+    return geo;
+  }
+  return new THREE.BoxGeometry(0.19, 0.078, 0.085);
+}
+
+// ============================================================================
+// SHARED GEOMETRY & MATERIAL CACHES (Keeps 8 bikes x 2 viewports at 60 FPS)
+// ============================================================================
 let sharedGeos = null;
+const cachedMaterialSets = new Map();
 
 function getSharedGeometries() {
   if (sharedGeos) return sharedGeos;
 
-  const frontTireGeo = createTorusTireGeometry(0.24, 0.092, 14, 28);
-  const rearTireGeo = createTorusTireGeometry(0.24, 0.105, 14, 28);
-  const torusXZ = isTorusInXZPlane(frontTireGeo);
+  // 17" GP Wheels: 0.60m OD (radius 0.30m), rear 0.186m wide, front 0.125m wide
+  const frontTireGeo = createRacingSlickTireGeometry(0.296, 0.214, 0.125, 32);
+  const rearTireGeo = createRacingSlickTireGeometry(0.300, 0.214, 0.186, 36);
+
+  // Curved clip-on handlebar tube
+  let handlebarGeo;
+  if (typeof THREE.CatmullRomCurve3 === 'function' && typeof THREE.TubeGeometry === 'function') {
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(-0.06, 0.22, 0.10),
+      new THREE.Vector3(-0.11, 0.205, 0.18),
+      new THREE.Vector3(-0.145, 0.185, 0.265)
+    ]);
+    handlebarGeo = new THREE.TubeGeometry(curve, 8, 0.011, 8, false);
+  } else {
+    handlebarGeo = new THREE.CylinderGeometry(0.011, 0.011, 0.20, 8);
+  }
+
+  // Tubular rear subframe rail
+  let subframeGeo;
+  if (typeof THREE.CatmullRomCurve3 === 'function' && typeof THREE.TubeGeometry === 'function') {
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(-0.14, 0.50, 0),
+      new THREE.Vector3(-0.42, 0.61, 0),
+      new THREE.Vector3(-0.68, 0.70, 0),
+      new THREE.Vector3(-0.42, 0.52, 0),
+      new THREE.Vector3(-0.15, 0.37, 0)
+    ]);
+    subframeGeo = new THREE.TubeGeometry(curve, 16, 0.012, 6, false);
+  } else {
+    subframeGeo = new THREE.CylinderGeometry(0.014, 0.014, 0.52, 8);
+  }
 
   sharedGeos = {
+    // Tires & 17" wheels
     frontTireGeo,
     rearTireGeo,
-    torusXZ,
-    frontRimBarrel: new THREE.CylinderGeometry(0.195, 0.195, 0.105, 20),
-    rearRimBarrel: new THREE.CylinderGeometry(0.195, 0.195, 0.145, 20),
-    frontHub: new THREE.CylinderGeometry(0.056, 0.056, 0.15, 14),
-    rearHub: new THREE.CylinderGeometry(0.064, 0.064, 0.18, 14),
-    spokeBox: new THREE.BoxGeometry(0.036, 0.37, 0.034),
-    frontBrakeDisc: new THREE.CylinderGeometry(0.156, 0.156, 0.012, 22),
-    frontDiscCarrier: new THREE.CylinderGeometry(0.088, 0.088, 0.016, 14),
-    rearBrakeDisc: new THREE.CylinderGeometry(0.115, 0.115, 0.012, 18),
-    rearSprocket: new THREE.CylinderGeometry(0.132, 0.132, 0.014, 20),
+    frontRimBarrel: createWheelRimLatheGeometry(0.214, 0.105, 24),
+    rearRimBarrel: createWheelRimLatheGeometry(0.214, 0.158, 24),
+    frontHub: new THREE.CylinderGeometry(0.052, 0.052, 0.135, 16),
+    rearHub: new THREE.CylinderGeometry(0.062, 0.062, 0.175, 16),
+    wheelSpoke: new THREE.BoxGeometry(0.032, 0.39, 0.022),
+    frontBrakeDisc: new THREE.CylinderGeometry(0.158, 0.158, 0.008, 24),
+    frontDiscCarrier: new THREE.CylinderGeometry(0.092, 0.092, 0.012, 16),
+    rearBrakeDisc: new THREE.CylinderGeometry(0.108, 0.108, 0.008, 20),
+    rearSprocket: new THREE.CylinderGeometry(0.118, 0.118, 0.010, 24),
+    driveChain: createDriveChainGeometry(),
 
-    // Frame, swingarm, engine & forks
-    frameSpar: new THREE.BoxGeometry(0.68, 0.095, 0.038),
-    subframeRail: new THREE.CylinderGeometry(0.016, 0.016, 0.52, 8),
-    swingarmBeam: new THREE.BoxGeometry(0.62, 0.072, 0.036),
-    swingarmBrace: new THREE.BoxGeometry(0.38, 0.035, 0.028),
-    engineBlock: new THREE.BoxGeometry(0.42, 0.32, 0.28),
-    radiatorBox: new THREE.BoxGeometry(0.075, 0.28, 0.33),
-    forkOuter: new THREE.CylinderGeometry(0.028, 0.026, 0.38, 12),
-    forkInner: new THREE.CylinderGeometry(0.021, 0.021, 0.32, 12),
-    caliperBox: new THREE.BoxGeometry(0.082, 0.095, 0.048),
-    tripleClamp: new THREE.BoxGeometry(0.09, 0.026, 0.26),
-    handlebarTube: new THREE.CylinderGeometry(0.012, 0.012, 0.22, 8),
-    leverBlade: new THREE.BoxGeometry(0.015, 0.012, 0.12),
-    tachDial: new THREE.CylinderGeometry(0.052, 0.052, 0.028, 16),
-    tempDial: new THREE.CylinderGeometry(0.028, 0.028, 0.026, 12),
-    dashFoam: new THREE.BoxGeometry(0.11, 0.04, 0.22),
+    // Sculpted chassis, swingarm, forks & rearsets
+    frameSpar: createFrameSparExtrudeGeometry(),
+    subframeRail: subframeGeo,
+    swingarmBeam: createSwingarmExtrudeGeometry(),
+    swingarmBridge: new THREE.BoxGeometry(0.10, 0.055, 0.25),
+    rearShockSpring: new THREE.CylinderGeometry(0.036, 0.036, 0.19, 12),
+    engineBlock: new THREE.CylinderGeometry(0.16, 0.18, 0.26, 12),
+    radiatorCurved: new THREE.CylinderGeometry(0.26, 0.26, 0.28, 12, 1, false, -0.45, 0.90),
+    forkOuter: new THREE.CylinderGeometry(0.027, 0.025, 0.38, 14),
+    forkInner: new THREE.CylinderGeometry(0.020, 0.020, 0.32, 14),
+    caliperBody: new THREE.SphereGeometry(0.048, 10, 8),
+    tripleClamp: new THREE.BoxGeometry(0.085, 0.024, 0.25),
+    handlebarCurve: handlebarGeo,
+    gripCyl: new THREE.CylinderGeometry(0.015, 0.015, 0.11, 10),
+    leverBlade: new THREE.BoxGeometry(0.014, 0.010, 0.11),
+    tachDial: new THREE.CylinderGeometry(0.048, 0.048, 0.026, 18),
+    tempDial: new THREE.CylinderGeometry(0.026, 0.026, 0.024, 14),
+    dashFoam: new THREE.BoxGeometry(0.10, 0.036, 0.21),
+    footpegRod: new THREE.CylinderGeometry(0.011, 0.011, 0.065, 8),
+    heelGuard: new THREE.BoxGeometry(0.09, 0.065, 0.008),
 
-    // Sculpted 1990 500cc bodywork
+    // Sculpted 1990 500cc GP Bodywork
     noseCone: createNoseLatheGeometry(),
-    bubbleScreen: new THREE.SphereGeometry(0.23, 18, 14),
-    fuelTankMain: new THREE.SphereGeometry(0.24, 18, 14),
-    fuelCap: new THREE.CylinderGeometry(0.042, 0.042, 0.018, 14),
-    sideFairingShell: new THREE.SphereGeometry(0.32, 18, 14),
-    bellyPan: new THREE.CylinderGeometry(0.15, 0.19, 0.88, 14),
-    tailCowlMain: new THREE.SphereGeometry(0.22, 16, 12),
-    tailNumberPlate: new THREE.BoxGeometry(0.36, 0.16, 0.018),
-    seatPad: new THREE.BoxGeometry(0.34, 0.045, 0.25),
-    seatBumStop: new THREE.CylinderGeometry(0.05, 0.06, 0.23, 12),
-    frontFender: new THREE.SphereGeometry(0.18, 14, 12),
-    rearHugger: new THREE.SphereGeometry(0.19, 12, 10),
-    ventSlat: new THREE.BoxGeometry(0.16, 0.014, 0.02),
+    bubbleScreen: new THREE.SphereGeometry(0.22, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.58),
+    fuelTankMain: createFuelTankExtrudeGeometry(),
+    fuelCap: new THREE.CylinderGeometry(0.040, 0.040, 0.014, 16),
+    sideFairingShell: createSideFairingExtrudeGeometry(),
+    bellyPanKeel: new THREE.CylinderGeometry(0.125, 0.145, 0.70, 14),
+    tailCowlMain: createTailCowlExtrudeGeometry(),
+    underTailRecess: new THREE.BoxGeometry(0.14, 0.068, 0.19),
+    seatPad: new THREE.SphereGeometry(0.16, 14, 10),
+    seatBumStop: new THREE.CylinderGeometry(0.045, 0.052, 0.22, 12),
+    frontFender: new THREE.SphereGeometry(0.175, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    rearHugger: new THREE.SphereGeometry(0.312, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.24),
+    ventSlat: new THREE.BoxGeometry(0.14, 0.012, 0.016),
 
-    // 2-stroke expansion chamber cones & carbon silencers
-    expHeader: new THREE.CylinderGeometry(0.026, 0.036, 0.28, 12),
-    expDiffuser: new THREE.CylinderGeometry(0.036, 0.068, 0.34, 14),
-    expBelly: new THREE.CylinderGeometry(0.068, 0.064, 0.22, 14),
-    expBaffle: new THREE.CylinderGeometry(0.064, 0.028, 0.28, 14),
-    silencerCan: new THREE.CylinderGeometry(0.034, 0.034, 0.32, 14),
-    silencerTip: new THREE.CylinderGeometry(0.02, 0.022, 0.065, 10),
+    // 2-Stroke Expansion Chambers & Stingers (TubeGeometry + LatheGeometry nozzles)
+    lowerExhaustLeft: createExpansionChamberTubeGeometry(-1),
+    lowerExhaustRight: createExpansionChamberTubeGeometry(1),
+    underTailExhaustLeft: createUnderTailExhaustGeometry(-1),
+    underTailExhaustRight: createUnderTailExhaustGeometry(1),
+    silencerCan: new THREE.CylinderGeometry(0.025, 0.025, 0.24, 14),
+    stingerNozzle: createStingerNozzleLatheGeometry(),
+    exhaustBore: new THREE.CylinderGeometry(0.013, 0.013, 0.02, 12),
 
-    // Articulated Rider
-    pelvisSphere: new THREE.SphereGeometry(0.148, 14, 12),
-    torsoChest: new THREE.CylinderGeometry(0.145, 0.125, 0.38, 14),
-    torsoShoulderCap: new THREE.SphereGeometry(0.078, 12, 10),
-    aeroBackHump: new THREE.SphereGeometry(0.115, 12, 10),
-    upperArm: new THREE.CylinderGeometry(0.048, 0.042, 0.24, 10),
-    elbowSphere: new THREE.SphereGeometry(0.046, 10, 8),
-    forearm: new THREE.CylinderGeometry(0.04, 0.034, 0.23, 10),
-    gloveSphere: new THREE.SphereGeometry(0.042, 10, 8),
-    thighCyl: new THREE.CylinderGeometry(0.072, 0.058, 0.29, 12),
-    kneeSphere: new THREE.SphereGeometry(0.062, 12, 10),
-    kneePuck: new THREE.CylinderGeometry(0.048, 0.042, 0.03, 12),
-    shinCyl: new THREE.CylinderGeometry(0.056, 0.044, 0.27, 12),
-    bootBox: new THREE.BoxGeometry(0.19, 0.078, 0.088),
-    helmetShell: new THREE.SphereGeometry(0.155, 18, 14),
-    helmetVisor: new THREE.SphereGeometry(0.151, 16, 12),
-    helmetChin: new THREE.CylinderGeometry(0.095, 0.11, 0.09, 14),
+    // Sculpted Anatomical Rider & Helmet
+    riderTorso: createSculptedRiderTorsoGeometry(),
+    riderPelvis: createSculptedPelvisGeometry(),
+    upperArm: createLimbCapsuleGeometry(0.060, 0.044, 0.165, 5, 12),
+    forearm: createLimbCapsuleGeometry(0.044, 0.034, 0.215, 5, 12),
+    gloveSphere: new THREE.SphereGeometry(0.038, 10, 8),
+    thighCapsule: createLimbCapsuleGeometry(0.078, 0.058, 0.19, 5, 12),
+    kneePuck: new THREE.CylinderGeometry(0.040, 0.035, 0.020, 12),
+    shinCapsule: createLimbCapsuleGeometry(0.058, 0.042, 0.24, 5, 12),
+    racingBoot: createRacingBootGeometry(),
+    neckCyl: new THREE.CylinderGeometry(0.070, 0.084, 0.05, 12),
+    helmetShell: createHelmetLatheGeometry(),
+    helmetVisor: createHelmetVisorGeometry(),
 
     // Contact shadow & knee sparks
-    shadowOuter: new THREE.CylinderGeometry(0.96, 0.96, 0.004, 24),
-    shadowInner: new THREE.CylinderGeometry(0.68, 0.68, 0.005, 20),
-    sparkStreak: new THREE.BoxGeometry(0.24, 0.018, 0.018),
-    sparkCore: new THREE.SphereGeometry(0.048, 8, 8)
+    shadowOuter: new THREE.CylinderGeometry(0.92, 0.92, 0.004, 24),
+    shadowInner: new THREE.CylinderGeometry(0.66, 0.66, 0.005, 20),
+    sparkStreak: new THREE.BoxGeometry(0.24, 0.016, 0.016),
+    sparkCore: new THREE.SphereGeometry(0.044, 8, 8)
   };
 
   return sharedGeos;
 }
 
-function buildSparkCluster() {
-  const G = getSharedGeometries();
-  const group = new THREE.Group();
-  const coreMat = new THREE.MeshBasicMaterial({
+function getMaterialSet(bikeSpec = {}, textureSet = null, liveryOverride = null) {
+  const bikeId = bikeSpec.id || 'akagi';
+  const cPrimary = bikeSpec.colorPrimary ?? 0xd91424;
+  const cSecondary = bikeSpec.colorSecondary ?? 0xffffff;
+  const cAccent = bikeSpec.colorAccent ?? 0x151515;
+  const cacheKey = `${bikeId}_${cPrimary}_${cSecondary}_${cAccent}_${Boolean(textureSet)}_${Boolean(liveryOverride)}`;
+
+  if (cachedMaterialSets.has(cacheKey)) {
+    return cachedMaterialSets.get(cacheKey);
+  }
+
+  const liverySet = createLiverySet(bikeSpec);
+
+  const fairingMat = makePhysicalMat({
+    color: 0xffffff,
+    map: liverySet.fairing || liveryOverride || null,
+    roughness: 0.13,
+    metalness: 0.10,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.06
+  });
+
+  const tailMat = makePhysicalMat({
+    color: 0xffffff,
+    map: liverySet.tail || liverySet.fairing || null,
+    roughness: 0.13,
+    metalness: 0.10,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.06
+  });
+
+  const primaryGlossMat = makePhysicalMat({
+    color: cPrimary,
+    roughness: 0.14,
+    metalness: 0.12,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.07
+  });
+
+  const secondaryGlossMat = makePhysicalMat({
+    color: cSecondary,
+    roughness: 0.15,
+    metalness: 0.10,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.07
+  });
+
+  const accentMat = makePhysicalMat({
+    color: cAccent,
+    roughness: 0.26,
+    metalness: 0.16,
+    clearcoat: 0.65
+  });
+
+  const tireSlickMat = makeStandardMat({
+    color: 0xffffff,
+    map: liverySet.tireSidewall || textureSet?.tireTread || null,
+    roughness: 0.56,
+    metalness: 0.06
+  });
+
+  const magWheelMat = makeStandardMat({
+    color: bikeId === 'shiden' ? 0xf2f4f8 : bikeId === 'corsa' ? 0x22262e : 0xe8edf4,
+    roughness: 0.24,
+    metalness: 0.78
+  });
+
+  const aluminumFrameMat = makeStandardMat({
+    color: 0xdbe2ec,
+    roughness: 0.20,
+    metalness: 0.88
+  });
+
+  const chromeMat = makePhysicalMat({
+    color: 0xf6faff,
+    roughness: 0.05,
+    metalness: 0.96,
+    clearcoat: 1.0
+  });
+
+  const goldAnodizedMat = makeStandardMat({
+    color: 0xe4b234,
+    roughness: 0.20,
+    metalness: 0.86
+  });
+
+  const brakeDiscMat = makeStandardMat({
+    color: 0xd0d8e2,
+    map: textureSet?.brakeDisc || null,
+    roughness: 0.24,
+    metalness: 0.88
+  });
+
+  const carbonMat = makeStandardMat({
+    color: textureSet?.carbon ? 0x8e96a0 : 0x22262c,
+    map: textureSet?.carbon || null,
+    roughness: 0.30,
+    metalness: 0.26
+  });
+
+  const exhaustExpansionMat = makeStandardMat({
+    color: 0x6f737c,
+    roughness: 0.26,
+    metalness: 0.85
+  });
+
+  const darkEngineMat = makeStandardMat({
+    color: 0x282d36,
+    roughness: 0.42,
+    metalness: 0.68
+  });
+
+  const blackRubberMat = makeStandardMat({
+    color: 0x14161b,
+    roughness: 0.82,
+    metalness: 0.04
+  });
+
+  const exhaustBoreMat = new THREE.MeshBasicMaterial({
+    color: 0x050608
+  });
+
+  const windscreenMat = makePhysicalMat({
+    color: 0xcce6ff,
+    roughness: 0.05,
+    metalness: 0.06,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.03,
+    transparent: true,
+    opacity: 0.48
+  });
+
+  const visorChromeMat = makePhysicalMat({
+    color: 0x0c121d,
+    roughness: 0.04,
+    metalness: 0.94,
+    clearcoat: 1.0
+  });
+
+  const leathersBackMat = makePhysicalMat({
+    color: 0xffffff,
+    map: liverySet.leathers,
+    roughness: 0.36,
+    metalness: 0.06,
+    clearcoat: 0.38,
+    clearcoatRoughness: 0.26
+  });
+
+  const leathersLimbMat = makePhysicalMat({
+    color: 0xffffff,
+    map: liverySet.limbs,
+    roughness: 0.36,
+    metalness: 0.06,
+    clearcoat: 0.38,
+    clearcoatRoughness: 0.26
+  });
+
+  const shoulderYokeMat = makePhysicalMat({
+    color: liverySet.theme?.suitYoke || cSecondary,
+    roughness: 0.32,
+    metalness: 0.08,
+    clearcoat: 0.45
+  });
+
+  const leatherDarkMat = makeStandardMat({
+    color: 0x171a22,
+    roughness: 0.44,
+    metalness: 0.08
+  });
+
+  const helmetShellMat = makePhysicalMat({
+    color: 0xffffff,
+    map: liverySet.helmet,
+    roughness: 0.10,
+    metalness: 0.12,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.05
+  });
+
+  const puckMat = makeStandardMat({
+    color: 0xf5d428,
+    roughness: 0.48,
+    metalness: 0.05
+  });
+
+  const shadowOuterMat = new THREE.MeshBasicMaterial({
+    color: 0x05070a,
+    transparent: true,
+    opacity: 0.34,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -2
+  });
+
+  const shadowInnerMat = new THREE.MeshBasicMaterial({
+    color: 0x020305,
+    transparent: true,
+    opacity: 0.52,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -3
+  });
+
+  const sparkCoreMat = new THREE.MeshBasicMaterial({
     color: 0xfff6b0,
     transparent: true,
     opacity: 0.95
   });
-  const streakMat = new THREE.MeshBasicMaterial({
+
+  const sparkStreakMat = new THREE.MeshBasicMaterial({
     color: 0xff8c1a,
     transparent: true,
-    opacity: 0.9
+    opacity: 0.90
   });
 
-  const core = new THREE.Mesh(G.sparkCore, coreMat);
+  const mats = {
+    fairingMat,
+    tailMat,
+    primaryGlossMat,
+    secondaryGlossMat,
+    accentMat,
+    tireSlickMat,
+    magWheelMat,
+    aluminumFrameMat,
+    chromeMat,
+    goldAnodizedMat,
+    brakeDiscMat,
+    carbonMat,
+    exhaustExpansionMat,
+    darkEngineMat,
+    blackRubberMat,
+    exhaustBoreMat,
+    windscreenMat,
+    visorChromeMat,
+    leathersBackMat,
+    leathersLimbMat,
+    shoulderYokeMat,
+    leatherDarkMat,
+    helmetShellMat,
+    puckMat,
+    shadowOuterMat,
+    shadowInnerMat,
+    sparkCoreMat,
+    sparkStreakMat
+  };
+
+  cachedMaterialSets.set(cacheKey, mats);
+  return mats;
+}
+
+function buildSparkCluster(G, M) {
+  const group = new THREE.Group();
+  const core = new THREE.Mesh(G.sparkCore, M.sparkCoreMat);
   group.add(core);
 
   const angles = [
@@ -175,13 +1192,153 @@ function buildSparkCluster() {
     [0.05, 0.42, 0.08]
   ];
   for (let i = 0; i < angles.length; i++) {
-    const s = new THREE.Mesh(G.sparkStreak, i % 2 === 0 ? streakMat : coreMat);
+    const s = new THREE.Mesh(G.sparkStreak, i % 2 === 0 ? M.sparkStreakMat : M.sparkCoreMat);
     s.position.set(-0.11, 0.01 * i, 0);
     s.rotation.set(angles[i][0], angles[i][1], angles[i][2]);
     group.add(s);
   }
   group.visible = false;
   return group;
+}
+
+function enableShadowsRecursive(root) {
+  if (!root || typeof root.traverse !== 'function') return;
+  root.traverse((obj) => {
+    if (obj && obj.isMesh && !obj.userData?.noShadow) {
+      obj.castShadow = true;
+      obj.receiveShadow = true;
+    }
+  });
+}
+
+// ============================================================================
+// OPTIONAL REAL GLB MODEL LOADER (assets/bikes/<bikeId>.glb)
+// Asynchronous, scales to 1.40m wheelbase, swaps in for procedural bike body,
+// keeps procedural rider unless GLB contains one. Fails silently and skips in Node.
+// ============================================================================
+let glbManifestPromise = null;
+const glbTemplateCache = new Map();
+
+function getEnabledGlbSet() {
+  if (typeof window === 'undefined' || typeof document === 'undefined' || typeof fetch !== 'function') {
+    return Promise.resolve(new Set());
+  }
+  if (window.__GP500_GLB_BIKES) {
+    if (Array.isArray(window.__GP500_GLB_BIKES)) {
+      return Promise.resolve(new Set(window.__GP500_GLB_BIKES));
+    }
+    return Promise.resolve(new Set(['akagi', 'shiden', 'kaze', 'corsa']));
+  }
+  try {
+    const params = new URLSearchParams(window.location?.search || '');
+    if (params.get('glb') === '1' || params.get('glb') === 'true') {
+      return Promise.resolve(new Set(['akagi', 'shiden', 'kaze', 'corsa']));
+    }
+  } catch {
+    // ignore URL parse error
+  }
+  if (!glbManifestPromise) {
+    glbManifestPromise = fetch('./assets/bikes/README.md')
+      .then((res) => (res && res.ok ? res.text() : ''))
+      .then((text) => {
+        const set = new Set();
+        const match = text.match(/^[ \t]*ENABLE_GLB[ \t]*:[ \t]*([^\r\n#]+)/im);
+        if (match && match[1]) {
+          for (const token of match[1].split(/[,\s]+/)) {
+            const clean = token.trim().toLowerCase().replace(/\.glb$/i, '');
+            if (clean && clean !== 'none') set.add(clean);
+          }
+        }
+        return set;
+      })
+      .catch(() => new Set());
+  }
+  return glbManifestPromise;
+}
+
+export async function tryLoadOptionalBikeGLB(bikeId, rig, force = false) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return false;
+  if (!bikeId || !rig || !rig.leanGroup) return false;
+
+  try {
+    if (!force) {
+      const enabledSet = await getEnabledGlbSet();
+      if (!enabledSet.has(bikeId) && !enabledSet.has('all')) {
+        return false;
+      }
+    }
+
+    let template = glbTemplateCache.get(bikeId);
+    if (template === undefined) {
+      const addonMod = await import('three/addons/loaders/GLTFLoader.js');
+      const GLTFLoader = addonMod?.GLTFLoader;
+      if (typeof GLTFLoader !== 'function') {
+        glbTemplateCache.set(bikeId, null);
+        return false;
+      }
+      const loader = new GLTFLoader();
+      const gltf = await new Promise((resolve, reject) => {
+        loader.load(
+          `./assets/bikes/${bikeId}.glb`,
+          (loaded) => resolve(loaded),
+          undefined,
+          (err) => reject(err)
+        );
+      });
+      template = gltf?.scene || null;
+      glbTemplateCache.set(bikeId, template);
+    }
+
+    if (!template) return false;
+
+    const model = template.clone(true);
+    if (typeof THREE.Box3 === 'function') {
+      const box = new THREE.Box3().setFromObject(model);
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      box.getSize(size);
+      box.getCenter(center);
+
+      // Scale longest horizontal axis to match 1.40m wheelbase (~2.02m total length with tires)
+      const horizLength = Math.max(size.x, size.z, 0.001);
+      if (size.z > size.x * 1.15) {
+        model.rotation.y = Math.PI * 0.5;
+      }
+      const scaleFactor = 2.00 / horizLength;
+      model.scale.multiplyScalar(scaleFactor);
+
+      const scaledBox = new THREE.Box3().setFromObject(model);
+      const scaledCenter = new THREE.Vector3();
+      scaledBox.getCenter(scaledCenter);
+      model.position.set(-scaledCenter.x, -scaledBox.min.y, -scaledCenter.z);
+    }
+
+    let hasRiderInGlb = false;
+    model.traverse((node) => {
+      if (node.isMesh) {
+        node.castShadow = true;
+        node.receiveShadow = true;
+      }
+      if (/rider|pilot|driver/i.test(node.name || '')) {
+        hasRiderInGlb = true;
+      }
+    });
+
+    if (rig.bikeBodyGroup) rig.bikeBodyGroup.visible = false;
+    if (rig.frontWheelGroup) rig.frontWheelGroup.visible = false;
+    if (rig.rearWheelGroup) rig.rearWheelGroup.visible = false;
+    if (rig.frontForkGroup) rig.frontForkGroup.visible = false;
+    if (hasRiderInGlb && rig.riderBody) {
+      rig.riderBody.visible = false;
+    }
+
+    rig.leanGroup.add(model);
+    rig.glbModel = model;
+    return true;
+  } catch {
+    // Fail silently as required
+    return false;
+  }
 }
 
 /**
@@ -191,558 +1348,390 @@ function buildSparkCluster() {
 export function createDetailedBikeRig(rider = {}, textureSet = null, liveryTexture = null) {
   const G = getSharedGeometries();
   const bikeSpec = rider.bike || {};
-  const cPrimary = bikeSpec.colorPrimary ?? 0xd91424;
-  const cSecondary = bikeSpec.colorSecondary ?? 0xffffff;
-  const cAccent = bikeSpec.colorAccent ?? 0x151515;
+  const M = getMaterialSet(bikeSpec, textureSet, liveryTexture);
 
   // Root hierarchy
   const rootGroup = new THREE.Group();
   const pitchGroup = new THREE.Group();
   const leanGroup = new THREE.Group();
+  const bikeBodyGroup = new THREE.Group();
   rootGroup.add(pitchGroup);
   pitchGroup.add(leanGroup);
+  leanGroup.add(bikeBodyGroup);
 
-  // Soft Grounding Contact Shadow right at y = 0.025 beneath the bike (stays flat on road)
+  // Soft Grounding Contact Shadow right at y = 0.022 beneath the bike (stays flat on road)
   const contactShadow = new THREE.Group();
-  contactShadow.position.set(0, 0.025, 0);
-  const shadowOuterMat = new THREE.MeshBasicMaterial({
-    color: 0x05070a,
-    transparent: true,
-    opacity: 0.34,
-    depthWrite: false,
-    polygonOffset: true,
-    polygonOffsetFactor: -1,
-    polygonOffsetUnits: -2
-  });
-  const shadowInnerMat = new THREE.MeshBasicMaterial({
-    color: 0x020305,
-    transparent: true,
-    opacity: 0.52,
-    depthWrite: false,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -3
-  });
-  const outerShadowMesh = new THREE.Mesh(G.shadowOuter, shadowOuterMat);
-  outerShadowMesh.scale.set(1.06, 1.0, 0.44);
-  const innerShadowMesh = new THREE.Mesh(G.shadowInner, shadowInnerMat);
-  innerShadowMesh.scale.set(1.08, 1.0, 0.36);
+  contactShadow.position.set(0, 0.022, 0);
+  const outerShadowMesh = new THREE.Mesh(G.shadowOuter, M.shadowOuterMat);
+  outerShadowMesh.scale.set(1.08, 1.0, 0.42);
+  outerShadowMesh.userData.noShadow = true;
+  const innerShadowMesh = new THREE.Mesh(G.shadowInner, M.shadowInnerMat);
+  innerShadowMesh.scale.set(1.08, 1.0, 0.34);
   innerShadowMesh.position.y = 0.001;
+  innerShadowMesh.userData.noShadow = true;
   contactShadow.add(outerShadowMesh, innerShadowMesh);
   rootGroup.add(contactShadow);
 
-  // PBR Materials
-  const liveryBodyMat = makePhysicalMat({
-    color: liveryTexture ? 0xffffff : cPrimary,
-    map: liveryTexture || null,
-    roughness: 0.14,
-    metalness: 0.12,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.07
-  });
-
-  const primaryGlossMat = makePhysicalMat({
-    color: cPrimary,
-    roughness: 0.15,
-    metalness: 0.14,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.08
-  });
-
-  const secondaryGlossMat = makePhysicalMat({
-    color: cSecondary,
-    roughness: 0.16,
-    metalness: 0.12,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.08
-  });
-
-  const accentMat = makePhysicalMat({
-    color: cAccent,
-    roughness: 0.28,
-    metalness: 0.18,
-    clearcoat: 0.65
-  });
-
-  const tireSlickMat = makeStandardMat({
-    color: textureSet?.tireTread ? 0x26292e : 0x17191c,
-    map: textureSet?.tireTread || null,
-    roughness: 0.72,
-    metalness: 0.06
-  });
-
-  const magWheelMat = makeStandardMat({
-    color: cSecondary === 0xf5c542 ? 0xe8be3c : 0xe8edf2,
-    roughness: 0.24,
-    metalness: 0.78
-  });
-
-  const aluminumFrameMat = makeStandardMat({
-    color: 0xd8dfe8,
-    roughness: 0.21,
-    metalness: 0.86
-  });
-
-  const chromeMat = makePhysicalMat({
-    color: 0xf4f8ff,
-    roughness: 0.06,
-    metalness: 0.96,
-    clearcoat: 1.0
-  });
-
-  const goldAnodizedMat = makeStandardMat({
-    color: 0xe2b032,
-    roughness: 0.2,
-    metalness: 0.86
-  });
-
-  const brakeDiscMat = makeStandardMat({
-    color: 0xcfd6df,
-    map: textureSet?.brakeDisc || null,
-    roughness: 0.24,
-    metalness: 0.88
-  });
-
-  const carbonMat = makeStandardMat({
-    color: textureSet?.carbon ? 0x889098 : 0x24282e,
-    map: textureSet?.carbon || null,
-    roughness: 0.32,
-    metalness: 0.25
-  });
-
-  const exhaustExpansionMat = makeStandardMat({
-    color: 0xbba486,
-    roughness: 0.25,
-    metalness: 0.85
-  });
-
-  const darkEngineMat = makeStandardMat({
-    color: 0x2b3038,
-    roughness: 0.42,
-    metalness: 0.68
-  });
-
-  const blackRubberMat = makeStandardMat({
-    color: 0x16181c,
-    roughness: 0.8,
-    metalness: 0.05
-  });
-
-  const windscreenMat = makePhysicalMat({
-    color: 0xd4ecff,
-    roughness: 0.06,
-    metalness: 0.08,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.04,
-    transparent: true,
-    opacity: 0.52
-  });
-
-  const visorChromeMat = makePhysicalMat({
-    color: 0x101622,
-    roughness: 0.06,
-    metalness: 0.92,
-    clearcoat: 1.0
-  });
-
-  const leatherPrimaryMat = makePhysicalMat({
-    color: cPrimary,
-    roughness: 0.34,
-    metalness: 0.08,
-    clearcoat: 0.45,
-    clearcoatRoughness: 0.25
-  });
-
-  const leatherSecondaryMat = makePhysicalMat({
-    color: cSecondary,
-    roughness: 0.34,
-    metalness: 0.08,
-    clearcoat: 0.45,
-    clearcoatRoughness: 0.25
-  });
-
-  const leatherDarkMat = makeStandardMat({
-    color: 0x1a1d24,
-    roughness: 0.42,
-    metalness: 0.1
-  });
-
-  const puckMat = makeStandardMat({
-    color: 0xf5d428,
-    roughness: 0.5,
-    metalness: 0.05
-  });
-
   // =========================================================================
-  // 1. FRONT & REAR PROFILED RACING SLICK WHEELS (Spin around local Z axis)
+  // 1. FRONT & REAR 17" PROFILED RACING SLICK WHEELS (Wheelbase = 1.40m)
+  // Front axle: x = +0.70m, y = 0.30m | Rear axle: x = -0.70m, y = 0.30m
   // =========================================================================
   const frontWheelGroup = new THREE.Group();
-  frontWheelGroup.position.set(0.74, 0.33, 0);
+  frontWheelGroup.position.set(0.70, 0.30, 0);
   leanGroup.add(frontWheelGroup);
 
-  const frontTireMesh = new THREE.Mesh(G.frontTireGeo, tireSlickMat);
-  if (G.torusXZ) frontTireMesh.rotation.x = Math.PI / 2;
+  const frontTireMesh = new THREE.Mesh(G.frontTireGeo, M.tireSlickMat);
+  frontTireMesh.rotation.x = Math.PI / 2;
   frontWheelGroup.add(frontTireMesh);
 
-  const frontRimMesh = new THREE.Mesh(G.frontRimBarrel, magWheelMat);
+  const frontRimMesh = new THREE.Mesh(G.frontRimBarrel, M.magWheelMat);
   frontRimMesh.rotation.x = Math.PI / 2;
   frontWheelGroup.add(frontRimMesh);
 
-  const frontHubMesh = new THREE.Mesh(G.frontHub, aluminumFrameMat);
+  const frontHubMesh = new THREE.Mesh(G.frontHub, M.aluminumFrameMat);
   frontHubMesh.rotation.x = Math.PI / 2;
   frontWheelGroup.add(frontHubMesh);
 
   for (let s = 0; s < 3; s++) {
-    const spoke = new THREE.Mesh(G.spokeBox, magWheelMat);
+    const spoke = new THREE.Mesh(G.wheelSpoke, M.magWheelMat);
     spoke.rotation.z = (s * Math.PI) / 3;
     frontWheelGroup.add(spoke);
   }
 
-  // Dual ventilated steel front brake discs + gold carrier spiders
   for (const side of [-1, 1]) {
-    const disc = new THREE.Mesh(G.frontBrakeDisc, brakeDiscMat);
+    const disc = new THREE.Mesh(G.frontBrakeDisc, M.brakeDiscMat);
     disc.rotation.x = Math.PI / 2;
-    disc.position.z = side * 0.068;
-    const carrier = new THREE.Mesh(G.frontDiscCarrier, goldAnodizedMat);
+    disc.position.z = side * 0.058;
+    const carrier = new THREE.Mesh(G.frontDiscCarrier, M.goldAnodizedMat);
     carrier.rotation.x = Math.PI / 2;
-    carrier.position.z = side * 0.068;
+    carrier.position.z = side * 0.058;
     frontWheelGroup.add(disc, carrier);
   }
 
   const rearWheelGroup = new THREE.Group();
-  rearWheelGroup.position.set(-0.72, 0.34, 0);
+  rearWheelGroup.position.set(-0.70, 0.30, 0);
   leanGroup.add(rearWheelGroup);
 
-  const rearTireMesh = new THREE.Mesh(G.rearTireGeo, tireSlickMat);
-  if (G.torusXZ) {
-    rearTireMesh.rotation.x = Math.PI / 2;
-    rearTireMesh.scale.set(1.0, 1.24, 1.0);
-  } else {
-    rearTireMesh.scale.set(1.0, 1.0, 1.24);
-  }
+  const rearTireMesh = new THREE.Mesh(G.rearTireGeo, M.tireSlickMat);
+  rearTireMesh.rotation.x = Math.PI / 2;
   rearWheelGroup.add(rearTireMesh);
 
-  const rearRimMesh = new THREE.Mesh(G.rearRimBarrel, magWheelMat);
+  const rearRimMesh = new THREE.Mesh(G.rearRimBarrel, M.magWheelMat);
   rearRimMesh.rotation.x = Math.PI / 2;
   rearWheelGroup.add(rearRimMesh);
 
-  const rearHubMesh = new THREE.Mesh(G.rearHub, aluminumFrameMat);
+  const rearHubMesh = new THREE.Mesh(G.rearHub, M.aluminumFrameMat);
   rearHubMesh.rotation.x = Math.PI / 2;
   rearWheelGroup.add(rearHubMesh);
 
   for (let s = 0; s < 3; s++) {
-    const spoke = new THREE.Mesh(G.spokeBox, magWheelMat);
+    const spoke = new THREE.Mesh(G.wheelSpoke, M.magWheelMat);
     spoke.rotation.z = (s * Math.PI) / 3;
-    spoke.scale.set(1.08, 1.0, 1.25);
+    spoke.scale.set(1.06, 1.0, 1.25);
     rearWheelGroup.add(spoke);
   }
 
   // Rear chain sprocket (left side -Z) & rear brake rotor (right side +Z)
-  const sprocketMesh = new THREE.Mesh(G.rearSprocket, goldAnodizedMat);
+  const sprocketMesh = new THREE.Mesh(G.rearSprocket, M.goldAnodizedMat);
   sprocketMesh.rotation.x = Math.PI / 2;
-  sprocketMesh.position.z = -0.095;
-  const rearDiscMesh = new THREE.Mesh(G.rearBrakeDisc, brakeDiscMat);
+  sprocketMesh.position.z = -0.104;
+  const rearDiscMesh = new THREE.Mesh(G.rearBrakeDisc, M.brakeDiscMat);
   rearDiscMesh.rotation.x = Math.PI / 2;
-  rearDiscMesh.position.z = 0.092;
+  rearDiscMesh.position.z = 0.102;
   rearWheelGroup.add(sprocketMesh, rearDiscMesh);
 
   // =========================================================================
-  // 2. TWIN-SPAR ALUMINUM CHASSIS, SWINGARM, V4 ENGINE & USD FRONT FORKS
+  // 2. TWIN-SPAR ALUMINUM CHASSIS, GULLWING SWINGARM, CHAIN & USD FORKS
   // =========================================================================
-  // V4 2-Stroke Engine & Radiator
-  const engineMesh = new THREE.Mesh(G.engineBlock, darkEngineMat);
-  engineMesh.position.set(0.05, 0.43, 0);
-  leanGroup.add(engineMesh);
+  const engineMesh = new THREE.Mesh(G.engineBlock, M.darkEngineMat);
+  engineMesh.rotation.x = Math.PI / 2;
+  engineMesh.position.set(0.06, 0.38, 0);
+  bikeBodyGroup.add(engineMesh);
 
-  const radiatorMesh = new THREE.Mesh(G.radiatorBox, aluminumFrameMat);
-  radiatorMesh.position.set(0.39, 0.46, 0);
-  radiatorMesh.rotation.z = 0.28;
-  leanGroup.add(radiatorMesh);
+  const radiatorMesh = new THREE.Mesh(G.radiatorCurved, M.aluminumFrameMat);
+  radiatorMesh.position.set(0.18, 0.42, 0);
+  radiatorMesh.rotation.y = Math.PI / 2;
+  bikeBodyGroup.add(radiatorMesh);
 
-  // Twin-Spar Brushed Aluminum Frame Beams & Braced Rear Swingarm
+  // Continuous Gold/Steel Roller Drive Chain Loop on Left Side (z = -0.105)
+  const chainMesh = new THREE.Mesh(G.driveChain, M.goldAnodizedMat);
+  chainMesh.position.z = -0.105;
+  bikeBodyGroup.add(chainMesh);
+
+  // Yellow/Gold Rear Monoshock Coil Spring ahead of rear tire
+  const shockMesh = new THREE.Mesh(G.rearShockSpring, M.goldAnodizedMat);
+  shockMesh.position.set(-0.24, 0.42, 0);
+  shockMesh.rotation.z = -0.26;
+  bikeBodyGroup.add(shockMesh);
+
+  // Swingarm Cross-Bridge
+  const swingBridge = new THREE.Mesh(G.swingarmBridge, M.aluminumFrameMat);
+  swingBridge.position.set(-0.34, 0.34, 0);
+  bikeBodyGroup.add(swingBridge);
+
   for (const side of [-1, 1]) {
-    const spar = new THREE.Mesh(G.frameSpar, aluminumFrameMat);
-    spar.position.set(0.14, 0.58, side * 0.175);
-    spar.rotation.z = 0.34;
-    leanGroup.add(spar);
+    // Sculpted Twin-Spar Brushed Aluminum Frame Beams
+    const spar = new THREE.Mesh(G.frameSpar, M.aluminumFrameMat);
+    spar.position.set(0, 0, side * 0.155);
+    bikeBodyGroup.add(spar);
 
-    const subframe = new THREE.Mesh(G.subframeRail, aluminumFrameMat);
-    subframe.position.set(-0.38, 0.63, side * 0.13);
-    subframe.rotation.z = Math.PI / 2 - 0.28;
-    leanGroup.add(subframe);
+    // Tubular Aluminum Rear Subframe
+    const subframe = new THREE.Mesh(G.subframeRail, M.aluminumFrameMat);
+    subframe.position.set(0, 0, side * 0.115);
+    bikeBodyGroup.add(subframe);
 
-    const swingarm = new THREE.Mesh(G.swingarmBeam, aluminumFrameMat);
-    swingarm.position.set(-0.42, 0.365, side * 0.145);
-    swingarm.rotation.z = 0.08;
-    leanGroup.add(swingarm);
+    // Sculpted Gullwing Braced Swingarm Arms
+    const swingarm = new THREE.Mesh(G.swingarmBeam, M.aluminumFrameMat);
+    swingarm.position.set(0, 0, side * 0.128);
+    bikeBodyGroup.add(swingarm);
 
-    const brace = new THREE.Mesh(G.swingarmBrace, aluminumFrameMat);
-    brace.position.set(-0.39, 0.425, side * 0.145);
-    brace.rotation.z = -0.18;
-    leanGroup.add(brace);
+    // CNC Aluminum Rearset Footpegs & Carbon Heel Guards right under rider's boots
+    const footpeg = new THREE.Mesh(G.footpegRod, M.chromeMat);
+    footpeg.rotation.x = Math.PI / 2;
+    footpeg.position.set(-0.13, 0.38, side * 0.185);
+    const heelGuard = new THREE.Mesh(G.heelGuard, M.carbonMat);
+    heelGuard.position.set(-0.16, 0.42, side * 0.158);
+    heelGuard.rotation.z = 0.25;
+    bikeBodyGroup.add(footpeg, heelGuard);
   }
 
-  // Carbon-Kevlar Rear Tire Hugger Fender
-  const rearHuggerMesh = new THREE.Mesh(G.rearHugger, carbonMat);
-  rearHuggerMesh.position.set(-0.56, 0.51, 0);
-  rearHuggerMesh.scale.set(1.2, 0.85, 0.82);
-  leanGroup.add(rearHuggerMesh);
+  // Rear Underslung Gold Brake Caliper on Right Swingarm
+  const rearCaliper = new THREE.Mesh(G.caliperBody, M.goldAnodizedMat);
+  rearCaliper.scale.set(1.1, 0.75, 0.65);
+  rearCaliper.position.set(-0.65, 0.22, 0.106);
+  bikeBodyGroup.add(rearCaliper);
+
+  // Carbon-Fiber Rear Tire Hugger centered over forward-top quadrant of rear slick
+  const rearHuggerMesh = new THREE.Mesh(G.rearHugger, M.carbonMat);
+  rearHuggerMesh.position.set(-0.70, 0.30, 0);
+  rearHuggerMesh.rotation.set(0, 0, -0.78);
+  rearHuggerMesh.scale.set(1.0, 1.0, 0.46);
+  bikeBodyGroup.add(rearHuggerMesh);
 
   // USD Front Fork & Cockpit Group
   const frontForkGroup = new THREE.Group();
-  frontForkGroup.position.set(0.58, 0.56, 0);
+  frontForkGroup.position.set(0.55, 0.54, 0);
   leanGroup.add(frontForkGroup);
 
   for (const side of [-1, 1]) {
     // Gold anodized USD upper fork tubes
-    const outerFork = new THREE.Mesh(G.forkOuter, goldAnodizedMat);
-    outerFork.position.set(-0.02, 0.08, side * 0.115);
-    outerFork.rotation.z = 0.42;
+    const outerFork = new THREE.Mesh(G.forkOuter, M.goldAnodizedMat);
+    outerFork.position.set(-0.02, 0.08, side * 0.108);
+    outerFork.rotation.z = 0.40;
     frontForkGroup.add(outerFork);
 
     // Chrome lower fork sliders reaching front axle
-    const innerFork = new THREE.Mesh(G.forkInner, chromeMat);
-    innerFork.position.set(0.09, -0.14, side * 0.112);
-    innerFork.rotation.z = 0.42;
+    const innerFork = new THREE.Mesh(G.forkInner, M.chromeMat);
+    innerFork.position.set(0.09, -0.14, side * 0.106);
+    innerFork.rotation.z = 0.40;
     frontForkGroup.add(innerFork);
 
-    // Gold Brembo-style twin brake calipers
-    const caliper = new THREE.Mesh(G.caliperBox, goldAnodizedMat);
-    caliper.position.set(0.08, -0.21, side * 0.088);
-    caliper.rotation.z = 0.35;
+    // Gold Twin-Piston Front Brake Calipers
+    const caliper = new THREE.Mesh(G.caliperBody, M.goldAnodizedMat);
+    caliper.scale.set(1.25, 0.92, 0.68);
+    caliper.position.set(0.08, -0.20, side * 0.082);
     frontForkGroup.add(caliper);
 
-    // Clip-on handlebars + rubber grips + brake/clutch levers
-    const bar = new THREE.Mesh(G.handlebarTube, aluminumFrameMat);
-    bar.position.set(-0.11, 0.21, side * 0.18);
-    bar.rotation.x = Math.PI / 2 + side * 0.16;
-    bar.rotation.z = -0.18;
+    // Curved Clip-On Handlebars + Rubber Grips + Chrome Levers
+    const bar = new THREE.Mesh(G.handlebarCurve, M.aluminumFrameMat);
+    bar.scale.set(1, 1, side);
     frontForkGroup.add(bar);
 
-    const grip = new THREE.Mesh(G.handlebarTube, blackRubberMat);
-    grip.scale.set(1.22, 0.58, 1.22);
-    grip.position.set(-0.13, 0.2, side * 0.23);
-    grip.rotation.x = Math.PI / 2 + side * 0.16;
+    const grip = new THREE.Mesh(G.gripCyl, M.blackRubberMat);
+    grip.position.set(-0.13, 0.195, side * 0.225);
+    grip.rotation.x = Math.PI / 2 + side * 0.18;
+    grip.rotation.z = -0.16;
     frontForkGroup.add(grip);
 
-    const lever = new THREE.Mesh(G.leverBlade, chromeMat);
-    lever.position.set(-0.08, 0.2, side * 0.23);
+    const lever = new THREE.Mesh(G.leverBlade, M.chromeMat);
+    lever.position.set(-0.085, 0.195, side * 0.225);
     lever.rotation.y = -side * 0.18;
     frontForkGroup.add(lever);
   }
 
-  // CNC Top Triple Clamp & 1990 Foam/Carbon Tachometer Dash
-  const topClamp = new THREE.Mesh(G.tripleClamp, aluminumFrameMat);
-  topClamp.position.set(-0.09, 0.23, 0);
-  topClamp.rotation.z = 0.42;
+  const topClamp = new THREE.Mesh(G.tripleClamp, M.aluminumFrameMat);
+  topClamp.position.set(-0.08, 0.22, 0);
+  topClamp.rotation.z = 0.40;
   frontForkGroup.add(topClamp);
 
-  const dashPad = new THREE.Mesh(G.dashFoam, carbonMat);
-  dashPad.position.set(-0.02, 0.26, 0);
-  dashPad.rotation.z = 0.48;
+  const dashPad = new THREE.Mesh(G.dashFoam, M.carbonMat);
+  dashPad.position.set(-0.01, 0.25, 0);
+  dashPad.rotation.z = 0.46;
   frontForkGroup.add(dashPad);
 
-  const tachFace = new THREE.Mesh(G.tachDial, secondaryGlossMat);
-  tachFace.position.set(-0.03, 0.28, 0);
-  tachFace.rotation.z = Math.PI / 2 - 0.45;
-  const tempGauge = new THREE.Mesh(G.tempDial, accentMat);
-  tempGauge.position.set(-0.03, 0.275, 0.075);
-  tempGauge.rotation.z = Math.PI / 2 - 0.45;
+  const tachFace = new THREE.Mesh(G.tachDial, M.secondaryGlossMat);
+  tachFace.position.set(-0.02, 0.27, 0);
+  tachFace.rotation.z = Math.PI / 2 - 0.44;
+  const tempGauge = new THREE.Mesh(G.tempDial, M.accentMat);
+  tempGauge.position.set(-0.02, 0.265, 0.072);
+  tempGauge.rotation.z = Math.PI / 2 - 0.44;
   frontForkGroup.add(tachFace, tempGauge);
 
   // Sculpted Front Fender hugging front slick tire
-  const frontFenderMesh = new THREE.Mesh(G.frontFender, primaryGlossMat);
-  frontFenderMesh.position.set(0.14, -0.06, 0);
-  frontFenderMesh.scale.set(1.28, 0.72, 0.72);
+  const frontFenderMesh = new THREE.Mesh(G.frontFender, M.primaryGlossMat);
+  frontFenderMesh.position.set(0.14, -0.09, 0);
+  frontFenderMesh.scale.set(1.22, 0.85, 0.68);
   frontForkGroup.add(frontFenderMesh);
 
   // =========================================================================
-  // 3. SCULPTED 1990 500cc AERODYNAMIC BODYWORK & BUBBLE WINDSCREEN
+  // 3. SCULPTED 1990 500cc AERODYNAMIC BODYWORK, TANK, TAIL & WINDSCREEN
   // =========================================================================
-  // Curved Lathe Aerodynamic Nose Cone
-  const noseMesh = new THREE.Mesh(G.noseCone, liveryBodyMat);
-  noseMesh.position.set(0.58, 0.71, 0);
+  const noseMesh = new THREE.Mesh(G.noseCone, M.fairingMat);
+  noseMesh.position.set(0.55, 0.69, 0);
   noseMesh.rotation.z = -Math.PI / 2 + 0.08;
-  noseMesh.scale.set(0.95, 1.08, 1.18);
-  leanGroup.add(noseMesh);
+  bikeBodyGroup.add(noseMesh);
 
-  // Glossy Translucent Curved Bubble Windscreen
-  const screenMesh = new THREE.Mesh(G.bubbleScreen, windscreenMat);
-  screenMesh.position.set(0.50, 0.85, 0);
-  screenMesh.rotation.z = -0.46;
-  screenMesh.scale.set(1.38, 0.68, 0.86);
-  leanGroup.add(screenMesh);
+  const screenMesh = new THREE.Mesh(G.bubbleScreen, M.windscreenMat);
+  screenMesh.position.set(0.47, 0.78, 0);
+  screenMesh.rotation.z = -0.38;
+  screenMesh.scale.set(1.36, 0.78, 0.88);
+  bikeBodyGroup.add(screenMesh);
 
-  // Sculpted Knee-Indented Fuel Tank + Brushed Silver Racing Fuel Cap
-  const tankMesh = new THREE.Mesh(G.fuelTankMain, liveryBodyMat);
-  tankMesh.position.set(0.14, 0.77, 0);
-  tankMesh.rotation.z = -0.12;
-  tankMesh.scale.set(1.42, 0.72, 0.88);
-  leanGroup.add(tankMesh);
+  // Sculpted Fuel Tank (ExtrudeGeometry with knee indents & clearcoat paint)
+  const tankMesh = new THREE.Mesh(G.fuelTankMain, M.fairingMat);
+  bikeBodyGroup.add(tankMesh);
 
-  const fuelCapMesh = new THREE.Mesh(G.fuelCap, chromeMat);
-  fuelCapMesh.position.set(0.22, 0.94, 0);
-  fuelCapMesh.rotation.z = -0.14;
-  leanGroup.add(fuelCapMesh);
+  const fuelCapMesh = new THREE.Mesh(G.fuelCap, M.chromeMat);
+  fuelCapMesh.position.set(0.20, 0.915, 0);
+  fuelCapMesh.rotation.z = -0.10;
+  bikeBodyGroup.add(fuelCapMesh);
 
-  // Twin Sculpted Aerodynamic Side Fairings with Heat Vents
+  // Left & Right Sculpted Side Fairing Shells (ExtrudeGeometry with bevels)
   for (const side of [-1, 1]) {
-    const sideFairing = new THREE.Mesh(G.sideFairingShell, liveryBodyMat);
-    sideFairing.position.set(0.22, 0.56, side * 0.115);
-    sideFairing.rotation.z = -0.08;
-    sideFairing.scale.set(1.58, 0.78, 0.42);
-    leanGroup.add(sideFairing);
+    const sideFairing = new THREE.Mesh(G.sideFairingShell, M.fairingMat);
+    sideFairing.position.set(0, 0, side * 0.148);
+    if (side < 0) {
+      sideFairing.scale.z = -1;
+    }
+    bikeBodyGroup.add(sideFairing);
 
-    // Side fairing heat extractor gill vents
     for (let v = 0; v < 3; v++) {
-      const vent = new THREE.Mesh(G.ventSlat, accentMat);
-      vent.position.set(0.18 - v * 0.045, 0.55 - v * 0.038, side * 0.238);
-      vent.rotation.z = 0.45;
-      leanGroup.add(vent);
+      const vent = new THREE.Mesh(G.ventSlat, M.accentMat);
+      vent.position.set(0.18 - v * 0.042, 0.52 - v * 0.036, side * 0.198);
+      vent.rotation.z = 0.42;
+      bikeBodyGroup.add(vent);
     }
   }
 
-  // Sculpted Lower Aerodynamic Belly Pan
-  const bellyMesh = new THREE.Mesh(G.bellyPan, secondaryGlossMat);
-  bellyMesh.position.set(0.08, 0.34, 0);
-  bellyMesh.rotation.z = Math.PI / 2 - 0.05;
-  bellyMesh.scale.set(0.88, 1.0, 1.18);
-  leanGroup.add(bellyMesh);
+  // Lower Aerodynamic Belly Pan Keel (centered symmetrically)
+  const bellyKeel = new THREE.Mesh(G.bellyPanKeel, M.secondaryGlossMat);
+  bellyKeel.position.set(0.12, 0.265, 0);
+  bellyKeel.rotation.z = Math.PI / 2 - 0.04;
+  bellyKeel.scale.set(0.60, 1.0, 0.85);
+  bikeBodyGroup.add(bellyKeel);
 
-  // Upswept 1990 GP Tail Cowl, Racing Seat & Number Plates
-  const tailCowl = new THREE.Mesh(G.tailCowlMain, liveryBodyMat);
-  tailCowl.position.set(-0.56, 0.79, 0);
-  tailCowl.rotation.z = 0.22;
-  tailCowl.scale.set(1.68, 0.64, 0.88);
-  leanGroup.add(tailCowl);
+  // Sculpted 1990s GP Tail Cowl / Seat Unit mapped with livery.tail (numbers & stripes!)
+  const tailCowl = new THREE.Mesh(G.tailCowlMain, M.tailMat);
+  bikeBodyGroup.add(tailCowl);
 
-  for (const side of [-1, 1]) {
-    const numPlate = new THREE.Mesh(G.tailNumberPlate, secondaryGlossMat);
-    numPlate.position.set(-0.54, 0.80, side * 0.185);
-    numPlate.rotation.z = 0.22;
-    numPlate.rotation.y = side * 0.12;
-    leanGroup.add(numPlate);
-  }
+  // Dark Recessed Under-Tail Exhaust Housing (visible directly under tail cowl from behind, like Ref 1)
+  const underTailBox = new THREE.Mesh(G.underTailRecess, M.blackRubberMat);
+  underTailBox.position.set(-0.79, 0.665, 0);
+  underTailBox.rotation.z = 0.16;
+  bikeBodyGroup.add(underTailBox);
 
-  const seatPadMesh = new THREE.Mesh(G.seatPad, blackRubberMat);
-  seatPadMesh.position.set(-0.14, 0.71, 0);
-  seatPadMesh.rotation.z = 0.08;
-  const seatStopMesh = new THREE.Mesh(G.seatBumStop, blackRubberMat);
-  seatStopMesh.position.set(-0.32, 0.755, 0);
+  // Sculpted Foam Seat Pad at y = 0.78m & Bum-Stop Pad
+  const seatPadMesh = new THREE.Mesh(G.seatPad, M.blackRubberMat);
+  seatPadMesh.position.set(-0.12, 0.755, 0);
+  seatPadMesh.scale.set(1.25, 0.28, 0.92);
+  const seatStopMesh = new THREE.Mesh(G.seatBumStop, M.blackRubberMat);
+  seatStopMesh.position.set(-0.25, 0.79, 0);
   seatStopMesh.rotation.x = Math.PI / 2;
-  leanGroup.add(seatPadMesh, seatStopMesh);
+  seatStopMesh.rotation.z = -0.22;
+  bikeBodyGroup.add(seatPadMesh, seatStopMesh);
 
   // =========================================================================
-  // 4. AUTHENTIC TWIN 2-STROKE EXPANSION CHAMBER EXHAUSTS & CARBON SILENCERS
+  // 4. 4-PIPE 2-STROKE EXPANSION CHAMBERS & CARBON/CHROME STINGERS
   // =========================================================================
+  const lowerPipeL = new THREE.Mesh(G.lowerExhaustLeft, M.exhaustExpansionMat);
+  const lowerPipeR = new THREE.Mesh(G.lowerExhaustRight, M.exhaustExpansionMat);
+  const upperPipeL = new THREE.Mesh(G.underTailExhaustLeft, M.exhaustExpansionMat);
+  const upperPipeR = new THREE.Mesh(G.underTailExhaustRight, M.exhaustExpansionMat);
+  bikeBodyGroup.add(lowerPipeL, lowerPipeR, upperPipeL, upperPipeR);
+
   for (const side of [-1, 1]) {
-    const zOff = side * 0.185;
-    // Lower forward header pipe
-    const header = new THREE.Mesh(G.expHeader, exhaustExpansionMat);
-    header.position.set(0.24, 0.26, zOff * 0.78);
-    header.rotation.z = Math.PI / 2 - 0.12;
+    // Lower side-exit Carbon-Kevlar silencer canister & hollow chrome stinger tip (sleek & tucked)
+    const lowerSilencer = new THREE.Mesh(G.silencerCan, M.carbonMat);
+    lowerSilencer.scale.set(0.82, 0.90, 0.82);
+    lowerSilencer.position.set(-0.68, 0.47, side * 0.126);
+    lowerSilencer.rotation.z = Math.PI / 2 + 0.50;
 
-    // Divergent diffuser cone
-    const diffuser = new THREE.Mesh(G.expDiffuser, exhaustExpansionMat);
-    diffuser.position.set(-0.04, 0.25, zOff * 0.92);
-    diffuser.rotation.z = Math.PI / 2 + 0.08;
+    const lowerTip = new THREE.Mesh(G.stingerNozzle, M.chromeMat);
+    lowerTip.scale.set(0.85, 0.85, 0.85);
+    lowerTip.position.set(-0.79, 0.538, side * 0.124);
+    lowerTip.rotation.z = Math.PI / 2 + 0.50;
 
-    // Fat 2-stroke expansion chamber belly section
-    const bellyCone = new THREE.Mesh(G.expBelly, exhaustExpansionMat);
-    bellyCone.position.set(-0.28, 0.30, zOff);
-    bellyCone.rotation.z = Math.PI / 2 + 0.32;
+    const lowerBore = new THREE.Mesh(G.exhaustBore, M.exhaustBoreMat);
+    lowerBore.position.set(-0.812, 0.552, side * 0.124);
+    lowerBore.rotation.z = Math.PI / 2 + 0.50;
 
-    // Upswept convergent baffle cone
-    const baffleCone = new THREE.Mesh(G.expBaffle, exhaustExpansionMat);
-    baffleCone.position.set(-0.48, 0.43, zOff);
-    baffleCone.rotation.z = Math.PI / 2 + 0.56;
+    // Upper under-tail stinger silencer canister & hollow chrome stinger tip
+    const upperSilencer = new THREE.Mesh(G.silencerCan, M.carbonMat);
+    upperSilencer.scale.set(0.76, 0.78, 0.76);
+    upperSilencer.position.set(-0.73, 0.665, side * 0.046);
+    upperSilencer.rotation.z = Math.PI / 2 + 0.10;
 
-    // Carbon-Kevlar stinger silencer canister & polished tip
-    const silencer = new THREE.Mesh(G.silencerCan, carbonMat);
-    silencer.position.set(-0.69, 0.59, zOff * 0.96);
-    silencer.rotation.z = Math.PI / 2 + 0.52;
+    const upperTip = new THREE.Mesh(G.stingerNozzle, M.chromeMat);
+    upperTip.scale.set(0.82, 0.82, 0.82);
+    upperTip.position.set(-0.845, 0.674, side * 0.046);
+    upperTip.rotation.z = Math.PI / 2 + 0.10;
 
-    const tip = new THREE.Mesh(G.silencerTip, chromeMat);
-    tip.position.set(-0.84, 0.68, zOff * 0.96);
-    tip.rotation.z = Math.PI / 2 + 0.52;
+    const upperBore = new THREE.Mesh(G.exhaustBore, M.exhaustBoreMat);
+    upperBore.position.set(-0.868, 0.678, side * 0.046);
+    upperBore.rotation.z = Math.PI / 2 + 0.10;
 
-    // Upper under-tail V4 bank stinger silencer + tip
-    const upperSilencer = new THREE.Mesh(G.silencerCan, carbonMat);
-    upperSilencer.scale.set(0.82, 0.85, 0.82);
-    upperSilencer.position.set(-0.72, 0.74, side * 0.085);
-    upperSilencer.rotation.z = Math.PI / 2 + 0.22;
-
-    const upperTip = new THREE.Mesh(G.silencerTip, chromeMat);
-    upperTip.position.set(-0.87, 0.77, side * 0.085);
-    upperTip.rotation.z = Math.PI / 2 + 0.22;
-
-    leanGroup.add(
-      header,
-      diffuser,
-      bellyCone,
-      baffleCone,
-      silencer,
-      tip,
+    bikeBodyGroup.add(
+      lowerSilencer,
+      lowerTip,
+      lowerBore,
       upperSilencer,
-      upperTip
+      upperTip,
+      upperBore
     );
   }
 
   // =========================================================================
-  // 5. SCULPTED ARTICULATED RACING RIDER, HELMET & KNEE-DOWN SPARK EMITTERS
+  // 5. SCULPTED ANATOMICAL RIDER (~1.75m IN CROUCHED GP RACING TUCK)
   // =========================================================================
   const riderBody = new THREE.Group();
-  riderBody.position.set(-0.10, 0.75, 0);
+  riderBody.position.set(-0.11, 0.74, 0);
   leanGroup.add(riderBody);
 
-  // Sculpted Leather Pelvis / Hips
-  const pelvisMesh = new THREE.Mesh(G.pelvisSphere, leatherDarkMat);
-  pelvisMesh.scale.set(1.15, 0.82, 1.06);
+  // Sculpted Leather Pelvis / Hips sitting deep on seat pad
+  const pelvisMesh = new THREE.Mesh(G.riderPelvis, M.leathersBackMat);
+  pelvisMesh.position.set(-0.02, 0.01, 0);
   riderBody.add(pelvisMesh);
 
   // Articulated Torso Group (pivots from hips for tuck-in and corner hang-off)
   const torsoGroup = new THREE.Group();
-  torsoGroup.position.set(0.02, 0.05, 0);
-  torsoGroup.rotation.z = -0.55;
+  torsoGroup.position.set(0.01, 0.02, 0);
+  torsoGroup.rotation.z = -0.80;
   riderBody.add(torsoGroup);
 
-  const chestMesh = new THREE.Mesh(G.torsoChest, leatherPrimaryMat);
-  chestMesh.position.set(0, 0.19, 0);
-  chestMesh.scale.set(0.95, 1.0, 1.16);
-  torsoGroup.add(chestMesh);
+  // Continuous Sculpted Back + Broad Shoulders + Aero Hump mapped with livery.leathers
+  const torsoMesh = new THREE.Mesh(G.riderTorso, M.leathersBackMat);
+  torsoGroup.add(torsoMesh);
 
-  // Aerodynamic Speed Hump on Back of Suit
-  const humpMesh = new THREE.Mesh(G.aeroBackHump, leatherSecondaryMat);
-  humpMesh.position.set(-0.08, 0.23, 0);
-  humpMesh.scale.set(0.95, 1.35, 0.82);
-  torsoGroup.add(humpMesh);
-
-  // Sculpted Shoulders & Articulated Left/Right Arms reaching Clip-Ons
+  // Smoothly Blended Capsule Arms connecting shoulder sockets -> tucked elbows -> clip-on grips
   const buildArm = (side) => {
     const armGroup = new THREE.Group();
-    armGroup.position.set(0.02, 0.34, side * 0.175);
+    armGroup.position.set(0.01, 0.30, side * 0.162);
 
-    const shoulderCap = new THREE.Mesh(G.torsoShoulderCap, leatherSecondaryMat);
-    armGroup.add(shoulderCap);
+    const pShoulder = { x: 0, y: 0, z: 0 };
+    const pElbow = { x: 0.135, y: -0.145, z: side * 0.018 };
+    const pWrist = { x: 0.365, y: 0.032, z: side * 0.058 };
 
-    const upperArm = new THREE.Mesh(G.upperArm, leatherPrimaryMat);
-    upperArm.position.set(0.09, -0.06, side * 0.03);
-    upperArm.rotation.z = -1.05;
-    upperArm.rotation.x = side * 0.18;
+    const upperArm = new THREE.Mesh(G.upperArm, M.leathersLimbMat);
+    alignLimbBetween(upperArm, pShoulder, pElbow);
     armGroup.add(upperArm);
 
-    const elbow = new THREE.Mesh(G.elbowSphere, leatherSecondaryMat);
-    elbow.position.set(0.19, -0.12, side * 0.05);
-    armGroup.add(elbow);
-
-    const forearm = new THREE.Mesh(G.forearm, leatherDarkMat);
-    forearm.position.set(0.30, -0.10, side * 0.02);
-    forearm.rotation.z = -1.42;
-    forearm.rotation.y = -side * 0.18;
+    const forearm = new THREE.Mesh(G.forearm, M.leathersLimbMat);
+    alignLimbBetween(forearm, pElbow, pWrist);
     armGroup.add(forearm);
 
-    const glove = new THREE.Mesh(G.gloveSphere, leatherSecondaryMat);
-    glove.position.set(0.41, -0.08, 0);
+    const glove = new THREE.Mesh(G.gloveSphere, M.leatherDarkMat);
+    glove.scale.set(1.25, 0.82, 0.92);
+    glove.position.set(pWrist.x, pWrist.y, pWrist.z);
     armGroup.add(glove);
 
     return armGroup;
@@ -752,67 +1741,61 @@ export function createDetailedBikeRig(rider = {}, textureSet = null, liveryTextu
   const rightArmGroup = buildArm(1);
   torsoGroup.add(leftArmGroup, rightArmGroup);
 
-  // Sculpted Full-Face 1990 GP Helmet & Dark Chrome Reflective Visor
+  // Sculpted Full-Face 1990 GP Helmet rising cleanly above the shoulder yoke
   const headGroup = new THREE.Group();
-  headGroup.position.set(0.06, 0.42, 0);
-  headGroup.rotation.z = 0.42;
+  headGroup.position.set(-0.045, 0.445, 0);
+  headGroup.rotation.z = 0.70;
   torsoGroup.add(headGroup);
 
-  const helmetShellMesh = new THREE.Mesh(G.helmetShell, secondaryGlossMat);
-  helmetShellMesh.scale.set(1.12, 1.0, 0.96);
+  const neckMesh = new THREE.Mesh(G.neckCyl, M.leatherDarkMat);
+  neckMesh.position.set(-0.01, -0.075, 0);
+  neckMesh.rotation.z = 0.16;
+  headGroup.add(neckMesh);
+
+  const helmetShellMesh = new THREE.Mesh(G.helmetShell, M.helmetShellMat);
   headGroup.add(helmetShellMesh);
 
-  const helmetStripeMesh = new THREE.Mesh(G.helmetShell, primaryGlossMat);
-  helmetStripeMesh.scale.set(1.13, 1.01, 0.42);
-  headGroup.add(helmetStripeMesh);
-
-  const helmetChinMesh = new THREE.Mesh(G.helmetChin, primaryGlossMat);
-  helmetChinMesh.position.set(0.06, -0.065, 0);
-  helmetChinMesh.rotation.z = -0.25;
-  headGroup.add(helmetChinMesh);
-
-  const visorMesh = new THREE.Mesh(G.helmetVisor, visorChromeMat);
-  visorMesh.position.set(0.042, 0.012, 0);
-  visorMesh.scale.set(1.04, 0.56, 0.96);
+  const visorMesh = new THREE.Mesh(G.helmetVisor, M.visorChromeMat);
+  visorMesh.position.set(0.016, 0.008, 0);
   headGroup.add(visorMesh);
 
-  // Articulated Left & Right Legs with Knee Pucks, Racing Boots & Spark Emitters
+  // Articulated Left & Right Capsule Legs -> Flush Knee Pucks -> Tall GP Racing Boots on Pegs
   const buildLeg = (side) => {
     const legPivot = new THREE.Group();
-    legPivot.position.set(-0.02, -0.02, side * 0.145);
+    legPivot.position.set(0.0, -0.01, side * 0.132);
 
-    // Thigh angled forward and down to knee
-    const thigh = new THREE.Mesh(G.thighCyl, leatherPrimaryMat);
-    thigh.position.set(0.11, -0.09, side * 0.035);
-    thigh.rotation.z = -0.88;
-    thigh.rotation.x = side * 0.14;
+    const pHip = { x: 0, y: 0, z: 0 };
+    const pKnee = { x: 0.23, y: -0.125, z: side * 0.068 };
+    const pAnkle = { x: -0.02, y: -0.34, z: side * 0.045 };
+
+    // Muscular leather thigh capsule straddling tank and flaring to knee
+    const thigh = new THREE.Mesh(G.thighCapsule, M.leathersLimbMat);
+    alignLimbBetween(thigh, pHip, pKnee);
     legPivot.add(thigh);
 
-    // Knee joint + prominent replaceable Knee Slider Puck
-    const knee = new THREE.Mesh(G.kneeSphere, leatherDarkMat);
-    knee.position.set(0.22, -0.17, side * 0.065);
-    legPivot.add(knee);
-
-    const puck = new THREE.Mesh(G.kneePuck, puckMat);
-    puck.position.set(0.22, -0.18, side * 0.115);
-    puck.rotation.x = Math.PI / 2 + side * 0.25;
+    // Flush replaceable Knee Slider Puck embedded on outer knee
+    const puck = new THREE.Mesh(G.kneePuck, M.puckMat);
+    puck.position.set(pKnee.x + 0.005, pKnee.y - 0.010, pKnee.z + side * 0.040);
+    puck.rotation.x = Math.PI / 2 + side * 0.20;
     legPivot.add(puck);
 
-    // Lower leg / shin guard angled back to rearset footpeg
-    const shin = new THREE.Mesh(G.shinCyl, leatherSecondaryMat);
-    shin.position.set(0.10, -0.28, side * 0.045);
-    shin.rotation.z = 0.82;
+    // Tall black armored GP racing boot shaft from knee down to rearset footpeg
+    const shin = new THREE.Mesh(G.shinCapsule, M.leatherDarkMat);
+    alignLimbBetween(shin, pKnee, pAnkle);
     legPivot.add(shin);
 
-    // Armored GP Racing Boot on footpeg
-    const boot = new THREE.Mesh(G.bootBox, leatherDarkMat);
-    boot.position.set(-0.01, -0.37, side * 0.038);
-    boot.rotation.z = 0.18;
+    // Sculpted GP racing boot foot resting on rearset peg
+    const boot = new THREE.Mesh(G.racingBoot, M.leatherDarkMat);
+    boot.position.set(pAnkle.x, pAnkle.y - 0.02, pAnkle.z);
+    boot.rotation.z = 0.12;
     legPivot.add(boot);
 
     // Knee-down spark burst emitter right at the knee puck
-    const sparkMesh = buildSparkCluster();
-    sparkMesh.position.set(0.20, -0.20, side * 0.145);
+    const sparkMesh = buildSparkCluster(G, M);
+    sparkMesh.position.set(pKnee.x - 0.01, pKnee.y - 0.025, pKnee.z + side * 0.068);
+    sparkMesh.traverse((o) => {
+      if (o.isMesh) o.userData.noShadow = true;
+    });
     legPivot.add(sparkMesh);
 
     return { legPivot, sparkMesh };
@@ -826,10 +1809,14 @@ export function createDetailedBikeRig(rider = {}, textureSet = null, liveryTextu
   const rightSparkMesh = rightLeg.sparkMesh;
   riderBody.add(leftLegPivot, rightLegPivot);
 
-  return {
+  // Enable shadow casting & receiving across all bike & rider meshes
+  enableShadowsRecursive(leanGroup);
+
+  const rig = {
     rootGroup,
     pitchGroup,
     leanGroup,
+    bikeBodyGroup,
     frontWheelGroup,
     rearWheelGroup,
     frontForkGroup,
@@ -847,12 +1834,19 @@ export function createDetailedBikeRig(rider = {}, textureSet = null, liveryTextu
     helmetMesh: headGroup,
     wheelAngle: 0
   };
+
+  // Optional async GLB model swap (skipped in Node; only loads if enabled / present)
+  if (bikeSpec.id) {
+    tryLoadOptionalBikeGLB(bikeSpec.id, rig, false);
+  }
+
+  return rig;
 }
 
 /**
  * Animates the hierarchical 1990 500cc GP bike rig & rider each frame:
  * - World position & heading, braking fork dive, wheelie lift, lean roll
- * - High-speed wheel rotation
+ * - High-speed wheel rotation (r = 0.30m for 17" 0.60m OD tires)
  * - Realistic MotoGP rider hang-off, knee-down extension, horizon counter-roll, aero tuck, and knee sparks
  * - Grounding contact shadow tracking on the asphalt
  */
@@ -881,12 +1875,12 @@ export function updateDetailedBikeRig(rig, rider, dt = 1 / 60) {
 
   // Front fork compression & subtle steering input
   if (rig.frontForkGroup) {
-    rig.frontForkGroup.position.y = 0.56 - brake * 0.022;
+    rig.frontForkGroup.position.y = 0.54 - brake * 0.022;
     rig.frontForkGroup.rotation.y = -clamp(lean * 0.08, -0.08, 0.08);
   }
 
-  // Spin front and rear wheels proportional to linear speed
-  rig.wheelAngle = (rig.wheelAngle || 0) - (speed / 0.32) * safeDt;
+  // Spin front and rear 17" wheels (outer radius 0.30m) proportional to linear speed
+  rig.wheelAngle = (rig.wheelAngle || 0) - (speed / 0.30) * safeDt;
   if (rig.frontWheelGroup) {
     rig.frontWheelGroup.rotation.z = rig.wheelAngle;
   }
@@ -901,22 +1895,22 @@ export function updateDetailedBikeRig(rig, rider, dt = 1 / 60) {
 
   if (rig.riderBody) {
     // Shift hips laterally off the seat into the inside of the turn
-    rig.riderBody.position.z = leanNorm * 0.22;
-    rig.riderBody.position.y = (isTuck ? 0.69 : 0.75) - absLean * 0.04;
-    rig.riderBody.position.x = isTuck ? -0.13 : -0.10;
+    rig.riderBody.position.z = leanNorm * 0.21;
+    rig.riderBody.position.y = (isTuck ? 0.705 : 0.740) - absLean * 0.038;
+    rig.riderBody.position.x = isTuck ? -0.14 : -0.11;
   }
 
   if (rig.torsoGroup) {
     // Tuck torso behind bubble windscreen or lean chest down across tank in corners
-    rig.torsoGroup.rotation.z = (isTuck ? -0.84 : -0.54) - absLean * 0.14;
-    rig.torsoGroup.rotation.x = leanNorm * 0.26;
-    rig.torsoGroup.rotation.y = -leanNorm * 0.16;
+    rig.torsoGroup.rotation.z = (isTuck ? -1.04 : -0.80) - absLean * 0.12;
+    rig.torsoGroup.rotation.x = leanNorm * 0.25;
+    rig.torsoGroup.rotation.y = -leanNorm * 0.15;
   }
 
   if (rig.headGroup) {
     // Counter-roll helmet to keep eyes level with horizon and looking into corner apex
     rig.headGroup.rotation.x = -lean * 0.62;
-    rig.headGroup.rotation.z = isTuck ? 0.62 : 0.38 + absLean * 0.12;
+    rig.headGroup.rotation.z = isTuck ? 0.90 : 0.68 + absLean * 0.10;
     rig.headGroup.rotation.y = -leanNorm * 0.24;
   }
 
@@ -933,8 +1927,8 @@ export function updateDetailedBikeRig(rig, rider, dt = 1 / 60) {
   }
 
   if (rig.leftArmGroup && rig.rightArmGroup) {
-    rig.leftArmGroup.rotation.z = isTuck ? 0.22 : 0.0;
-    rig.rightArmGroup.rotation.z = isTuck ? 0.22 : 0.0;
+    rig.leftArmGroup.rotation.z = isTuck ? 0.20 : 0.0;
+    rig.rightArmGroup.rotation.z = isTuck ? 0.20 : 0.0;
   }
 
   // Knee-slider titanium/ceramic sparks when heeled over > 0.78 rad at speed > 20 m/s
@@ -957,9 +1951,9 @@ export function updateDetailedBikeRig(rig, rider, dt = 1 / 60) {
     }
   }
 
-  // Grounding contact shadow stays flat on asphalt at y = 0.025 and tracks lateral lean offset
+  // Grounding contact shadow stays flat on asphalt at y = 0.022 and tracks lateral lean offset
   if (rig.contactShadow) {
-    rig.contactShadow.position.set(0, 0.025, Math.sin(lean) * 0.16);
+    rig.contactShadow.position.set(0, 0.022, Math.sin(lean) * 0.16);
     rig.contactShadow.rotation.z = w.pitch || 0;
     const shadowStretchZ = 1.0 + Math.abs(Math.sin(lean)) * 0.34;
     const shadowStretchX = 1.0 - Math.min(0.22, wheelie * 0.35);

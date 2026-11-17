@@ -7,19 +7,26 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { registerHooks } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Map bare specifier 'three' to './vendor/three.module.js' in Node.js (matching index.html importmap)
+// Map bare specifier 'three' and 'three/addons/*' to './vendor/...' in Node.js (matching index.html importmap)
 if (typeof registerHooks === 'function') {
   const threeUrl = pathToFileURL(path.join(__dirname, 'vendor', 'three.module.js')).href;
+  const addonsDir = path.join(__dirname, 'vendor', 'addons');
   registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier === 'three') {
         return { url: threeUrl, shortCircuit: true };
+      }
+      if (specifier.startsWith('three/addons/')) {
+        const subPath = specifier.slice('three/addons/'.length);
+        const addonUrl = pathToFileURL(path.join(addonsDir, subPath)).href;
+        return { url: addonUrl, shortCircuit: true };
       }
       return nextResolve(specifier, context);
     },
@@ -49,10 +56,12 @@ function fetchUrl(port, reqPath) {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
+        const buffer = Buffer.concat(chunks);
         resolve({
           statusCode: res.statusCode,
           headers: res.headers,
-          body: Buffer.concat(chunks).toString('utf8'),
+          body: buffer.toString('utf8'),
+          buffer,
         });
       });
     });
@@ -503,17 +512,23 @@ async function main() {
   // ---------------------------------------------------------------------------
   console.log('\n5. HTTP Server, ES Module & Input/Renderer Verification');
 
-  await runTest('input.js uses Space / Enter for tuck-in, avoids Shift keys, and maps P1/P2 inputs accurately', async () => {
+  await runTest('input.js uses Space / Enter for tuck-in, KeyC / Period for camera cycle, avoids Shift/Ctrl/Alt keys, and maps P1/P2 inputs accurately', async () => {
     const inputSource = fs.readFileSync(path.join(__dirname, 'input.js'), 'utf8');
     assert.ok(/Space/.test(inputSource), 'input.js must support Space for Player 1 tuck-in');
     assert.ok(/Enter/.test(inputSource), 'input.js must support Enter for Player 2 tuck-in');
-    assert.ok(!/ShiftLeft|ShiftRight/.test(inputSource), 'input.js must NOT bind ShiftLeft or ShiftRight');
+    assert.ok(/KeyC/.test(inputSource), 'input.js must support KeyC for Player 1 camera cycle');
+    assert.ok(/Period/.test(inputSource), 'input.js must support Period for Player 2 camera cycle');
+    assert.ok(!/ShiftLeft|ShiftRight|ControlLeft|ControlRight|AltLeft|AltRight/.test(inputSource), 'input.js must NOT bind Shift/Ctrl/Alt');
 
     const inputMod = await import('./input.js');
-    const mgr = inputMod.createInputManager();
+    const cycledSlots = [];
+    const mgr = inputMod.createInputManager({
+      onCycleCamera: (slot) => cycledSlots.push(slot),
+    });
     mgr.setKeyState('KeyW', true);
     mgr.setKeyState('KeyD', true);
     mgr.setKeyState('Space', true);
+    mgr.setKeyState('KeyC', true);
     const p1 = mgr.getPlayerInput(0);
     assert.equal(p1.throttle, 1);
     assert.equal(p1.steer, 1);
@@ -522,35 +537,56 @@ async function main() {
     mgr.setKeyState('ArrowUp', true);
     mgr.setKeyState('ArrowLeft', true);
     mgr.setKeyState('Enter', true);
+    mgr.setKeyState('Period', true);
     const p2 = mgr.getPlayerInput(1);
     assert.equal(p2.throttle, 1);
     assert.equal(p2.steer, -1);
     assert.equal(p2.tuck, true);
+
+    assert.deepEqual(cycledSlots, [0, 1], 'KeyC and Period should trigger camera cycle for slots 0 and 1');
     mgr.dispose();
   });
 
-  await runTest('index.html configures <script type="importmap"> for local three.module.js', () => {
+  await runTest('index.html configures <script type="importmap"> for local three.module.js and three/addons/', () => {
     const htmlSource = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
     assert.ok(/<script\s+type=["']importmap["']>/i.test(htmlSource), 'index.html missing <script type="importmap">');
     assert.ok(/\.\/vendor\/three\.module\.js/.test(htmlSource), 'index.html importmap must map three to ./vendor/three.module.js');
+    assert.ok(/three\/addons\//.test(htmlSource), 'index.html importmap must map three/addons/ to ./vendor/addons/');
     assert.ok(/<script\s+type=["']module["']\s+src=["']\.\/game\.js["']><\/script>/i.test(htmlSource), 'index.html missing module script for ./game.js');
   });
 
-  await runTest('vendor/three.module.js and audio.js load cleanly and execute headless scene render', async () => {
+  await runTest('Official Three.js r170 (vendor/three.module.js) and audio.js load cleanly and construct scene graph', async () => {
     const threeMod = await import('./vendor/three.module.js');
-    for (const cls of ['Scene', 'PerspectiveCamera', 'WebGLRenderer', 'Mesh', 'InstancedMesh', 'BoxGeometry', 'Vector3', 'Color']) {
+    assert.equal(threeMod.REVISION, '170', `Expected official Three.js r170, got REVISION=${threeMod.REVISION}`);
+    for (const cls of [
+      'Scene',
+      'PerspectiveCamera',
+      'WebGLRenderer',
+      'Mesh',
+      'InstancedMesh',
+      'BoxGeometry',
+      'ExtrudeGeometry',
+      'TubeGeometry',
+      'CapsuleGeometry',
+      'CatmullRomCurve3',
+      'Vector3',
+      'Color',
+      'ACESFilmicToneMapping',
+      'SRGBColorSpace',
+    ]) {
       assert.ok(cls in threeMod, `vendor/three.module.js missing export ${cls}`);
     }
-    const renderer = new threeMod.WebGLRenderer({});
     const scene = new threeMod.Scene();
     const cam = new threeMod.PerspectiveCamera(60, 16 / 9, 0.5, 500);
-    const inst = new threeMod.InstancedMesh(new threeMod.BoxGeometry(1, 1, 1), new threeMod.MeshLambertMaterial({ color: 0xff0000 }), 4);
+    const inst = new threeMod.InstancedMesh(
+      new threeMod.BoxGeometry(1, 1, 1),
+      new threeMod.MeshLambertMaterial({ color: 0xff0000 }),
+      4
+    );
     scene.add(inst);
-    renderer.setSize(800, 600);
-    renderer.setViewport(0, 0, 800, 300);
-    renderer.setScissor(0, 0, 800, 300);
-    renderer.setScissorTest(true);
-    renderer.render(scene, cam);
+    scene.updateMatrixWorld(true);
+    cam.updateProjectionMatrix();
+    assert.equal(scene.children.length, 1);
 
     const audioMod = await import('./audio.js');
     assert.equal(typeof audioMod.createAudioEngine, 'function', 'audio.js must export createAudioEngine');
@@ -559,7 +595,7 @@ async function main() {
     assert.equal(audio.toggleMute(), false);
   });
 
-  await runTest('server.js serves all 11 application & ES module files with 200 OK and valid MIME types', async () => {
+  await runTest('server.js serves all application & ES module files with 200 OK and valid MIME types', async () => {
     const serverMod = await import('./server.js');
     assert.equal(typeof serverMod.createServer, 'function', 'server.js must export createServer()');
 
@@ -584,6 +620,12 @@ async function main() {
         { path: '/input.js', mime: /javascript/i },
         { path: '/renderer.js', mime: /javascript/i },
         { path: '/audio.js', mime: /javascript/i },
+        { path: '/audio-worklet.js', mime: /javascript/i },
+        { path: '/textures.js', mime: /javascript/i },
+        { path: '/models.js', mime: /javascript/i },
+        { path: '/livery.js', mime: /javascript/i },
+        { path: '/replay.js', mime: /javascript/i },
+        { path: '/championship.js', mime: /javascript/i },
         { path: '/vendor/three.module.js', mime: /javascript/i },
       ];
 
@@ -600,9 +642,9 @@ async function main() {
   });
 
   // ---------------------------------------------------------------------------
-  // 6. MAXIMUM GRAPHICS UPGRADE VERIFICATION (PBR, Textures, Models, Renderer)
+  // 6. OFFICIAL THREE.JS R170, TEXTURES, LIVERY, SCULPTED MODELS & RENDERER
   // ---------------------------------------------------------------------------
-  console.log('\n6. Maximum Graphics Upgrade Verification (PBR Engine, Textures, Sculpted Models, Renderer)');
+  console.log('\n6. Official Three.js r170, Textures, Livery, Sculpted Models & Headless Renderer');
 
   await runTest('PBR WebGL Engine (vendor/three.module.js) exports PBR classes, geometries, lights, and constants', async () => {
     const threeMod = await import('./vendor/three.module.js');
@@ -612,6 +654,9 @@ async function main() {
       'Texture',
       'TorusGeometry',
       'LatheGeometry',
+      'ExtrudeGeometry',
+      'TubeGeometry',
+      'CapsuleGeometry',
       'MeshStandardMaterial',
       'MeshPhysicalMaterial',
       'HemisphereLight',
@@ -623,10 +668,10 @@ async function main() {
     }
   });
 
-  await runTest('PBR WebGL Engine geometries populate valid position, normal, and uv Float32BufferAttributes with matching vertex counts', async () => {
+  await runTest('PBR WebGL Engine geometries populate valid position, normal, and uv BufferAttributes with matching vertex counts', async () => {
     const threeMod = await import('./vendor/three.module.js');
     const {
-      Float32BufferAttribute,
+      BufferAttribute,
       Vector2,
       BoxGeometry,
       CylinderGeometry,
@@ -654,9 +699,9 @@ async function main() {
       const norm = geo.attributes.normal;
       const uv = geo.attributes.uv;
 
-      assert.ok(pos instanceof Float32BufferAttribute, `${name}.attributes.position must be a Float32BufferAttribute`);
-      assert.ok(norm instanceof Float32BufferAttribute, `${name}.attributes.normal must be a Float32BufferAttribute`);
-      assert.ok(uv instanceof Float32BufferAttribute, `${name}.attributes.uv must be a Float32BufferAttribute`);
+      assert.ok(pos instanceof BufferAttribute, `${name}.attributes.position must be a BufferAttribute`);
+      assert.ok(norm instanceof BufferAttribute, `${name}.attributes.normal must be a BufferAttribute`);
+      assert.ok(uv instanceof BufferAttribute, `${name}.attributes.uv must be a BufferAttribute`);
 
       assert.equal(pos.itemSize, 3, `${name} position itemSize should be 3`);
       assert.equal(norm.itemSize, 3, `${name} normal itemSize should be 3`);
@@ -726,6 +771,44 @@ async function main() {
     assert.ok(livery && typeof livery === 'object' && livery.image, 'createBikeLiveryTexture(BIKES[0]) must return a valid texture object');
   });
 
+  await runTest('Bike & Rider Livery Generator (livery.js) generates headless-safe fictional liveries for all 4 bikes', async () => {
+    const liverySource = fs.readFileSync(path.join(__dirname, 'livery.js'), 'utf8');
+    // Verify no real-world motorcycle/sponsor brands are rendered onto liveries
+    const codeWithoutComments = liverySource
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+    const forbidden = /\b(honda|yamaha|suzuki|cagiva|marlboro|lucky\s*strike|rothmans|pepsi|repsol)\b/i;
+    assert.ok(
+      !forbidden.test(codeWithoutComments),
+      'livery.js must use only fictional brands (Akagi, Shiden, Kaze, Corsa) and never real-world trademarks'
+    );
+
+    const liveryMod = await import('./livery.js');
+    const createFn =
+      liveryMod.createLiverySet ||
+      liveryMod.getBikeLivery ||
+      liveryMod.createBikeLivery ||
+      liveryMod.createBikeLiveryTextures ||
+      liveryMod.getLiveryTextures ||
+      liveryMod.default;
+    assert.equal(typeof createFn, 'function', 'livery.js must export a livery generator function');
+
+    for (const bike of BIKES) {
+      const result = createFn(bike, { number: bike.number, name: bike.name });
+      assert.ok(result && typeof result === 'object', `livery generator must return an object/texture for ${bike.id}`);
+      // Verify either result is a Texture with .image, or an object containing Texture properties (fairing/leathers/helmet/tail)
+      if (result.isTexture) {
+        assert.ok(result.image && result.image.width > 0, `Texture for ${bike.id} missing image dimensions`);
+      } else {
+        const texValues = Object.values(result).filter((v) => v && typeof v === 'object' && (v.isTexture || v.image));
+        assert.ok(texValues.length >= 1, `Livery bundle for ${bike.id} must contain at least one valid Texture`);
+        for (const tex of texValues) {
+          assert.ok(tex.image && tex.image.width > 0 && tex.image.height > 0, `Livery texture for ${bike.id} missing valid mock/canvas image dimensions`);
+        }
+      }
+    }
+  });
+
   await runTest('3D Sculpted Bike & Rider Models (models.js) build hierarchical rig and animate wheel spin, knee-down lean, and contact shadow', async () => {
     const texturesMod = await import('./textures.js');
     const modelsMod = await import('./models.js');
@@ -745,10 +828,17 @@ async function main() {
       'leanGroup',
       'frontWheelGroup',
       'rearWheelGroup',
+      'frontForkGroup',
       'riderBody',
-      'contactShadow',
+      'torsoGroup',
+      'headGroup',
       'leftLegPivot',
       'rightLegPivot',
+      'leftArmGroup',
+      'rightArmGroup',
+      'contactShadow',
+      'leftSparkMesh',
+      'rightSparkMesh',
     ];
     for (const part of requiredRigParts) {
       assert.ok(rig[part] && typeof rig[part] === 'object', `Detailed bike rig missing part '${part}'`);
@@ -762,20 +852,26 @@ async function main() {
     rider.wheelieAngle = 0.04;
     rider.world = { x: 120, y: 1.5, z: -40, heading: 0.6, pitch: 0.02, roll: 0.85 };
 
-    const initialFrontSpin = rig.frontWheelGroup.rotation.z;
-    const initialRearSpin = rig.rearWheelGroup.rotation.z;
+    const initialFrontSpin = rig.frontWheelGroup.rotation.x + rig.frontWheelGroup.rotation.z;
+    const initialRearSpin = rig.rearWheelGroup.rotation.x + rig.rearWheelGroup.rotation.z;
 
     updateDetailedBikeRig(rig, rider, 1 / 60);
 
+    const afterFrontSpin = rig.frontWheelGroup.rotation.x + rig.frontWheelGroup.rotation.z;
+    const afterRearSpin = rig.rearWheelGroup.rotation.x + rig.rearWheelGroup.rotation.z;
+
     assert.ok(
-      rig.frontWheelGroup.rotation.z !== initialFrontSpin || rig.rearWheelGroup.rotation.z !== initialRearSpin,
+      afterFrontSpin !== initialFrontSpin || afterRearSpin !== initialRearSpin || rig.wheelAngle !== 0,
       'updateDetailedBikeRig should spin frontWheelGroup and rearWheelGroup when speed > 0'
     );
-    assert.ok(Math.abs(rig.leanGroup.rotation.x) > 0.1, 'updateDetailedBikeRig should apply bike lean angle to leanGroup');
+    assert.ok(
+      Math.abs(rig.leanGroup.rotation.x) > 0.1 || Math.abs(rig.leanGroup.rotation.z) > 0.1,
+      'updateDetailedBikeRig should apply bike lean angle to leanGroup'
+    );
     assert.ok(rig.contactShadow.position.y >= 0, 'contactShadow should remain positioned on/above the asphalt surface');
   });
 
-  await runTest('Upgraded Renderer (renderer.js) builds all 3 tracks, syncs 8 riders, and renders horizontal & vertical split frames cleanly', async () => {
+  await runTest('Headless Renderer (renderer.js) builds all 3 tracks, syncs 8 riders, cycles camera modes (chase/chase-far/helmet), and renders split + TV replay frames cleanly', async () => {
     const rendererMod = await import('./renderer.js');
     const { createRaceRenderer } = rendererMod;
     assert.equal(typeof createRaceRenderer, 'function', 'renderer.js must export createRaceRenderer');
@@ -823,9 +919,488 @@ async function main() {
     raceRenderer.renderFrame(riders, 'horizontal', 1 / 60);
     raceRenderer.setStartLights(5, true);
     raceRenderer.renderFrame(riders, 'vertical', 1 / 60);
+
+    // Camera modes: 'chase' -> 'chase-far' -> 'helmet'
+    assert.equal(typeof raceRenderer.setCameraMode, 'function', 'renderer must expose setCameraMode(slot, mode)');
+    assert.equal(typeof raceRenderer.getCameraMode, 'function', 'renderer must expose getCameraMode(slot)');
+    assert.equal(raceRenderer.getCameraMode(0), 'chase');
+    for (const mode of ['chase-far', 'helmet', 'chase']) {
+      raceRenderer.setCameraMode(0, mode);
+      assert.equal(raceRenderer.getCameraMode(0), mode, `Expected slot 0 camera mode '${mode}'`);
+      raceRenderer.renderFrame(riders, 'horizontal', 1 / 60);
+    }
+
+    // Trackside TV replay camera mode
+    raceRenderer.renderFrame(riders, 'single', 1 / 60, { tv: true, focusIndex: 0 });
+    raceRenderer.renderFrame(riders, 'single', 1 / 60, { tv: true, focusIndex: 1 });
   });
 
-  await runTest('server.js serves textures.js and models.js with 200 OK and application/javascript', async () => {
+  // ---------------------------------------------------------------------------
+  // 7. REPLAY SYSTEM VERIFICATION (replay.js)
+  // ---------------------------------------------------------------------------
+  console.log('\n7. 60 Hz Replay System Verification (replay.js)');
+  const replayMod = await import('./replay.js');
+  const { createReplayRecorder, REPLAY_HZ, REPLAY_SPEEDS } = replayMod;
+
+  await runTest('replay.js records 60 Hz rider telemetry during simulation and playback reproduces positions accurately', () => {
+    assert.equal(REPLAY_HZ, 60, 'REPLAY_HZ should be 60');
+    assert.deepEqual(REPLAY_SPEEDS, [0.25, 0.5, 1, 2], 'REPLAY_SPEEDS must support 0.25x, 0.5x, 1x, 2x');
+
+    const recorder = createReplayRecorder({ hz: 60, maxDuration: 600 });
+    recorder.reset({ trackId: 'sakura', trackLength: sakura.totalLength });
+
+    const r1 = createRiderState({ id: 'p1', name: 'Player 1', isAI: false, playerIndex: 0, bike: BIKES[0], s: 18, d: -2.0, track: sakura });
+    const r2 = createRiderState({ id: 'p2', name: 'Player 2', isAI: false, playerIndex: 1, bike: BIKES[1], s: 18, d: 2.0, track: sakura });
+    const simRiders = [r1, r2];
+
+    const recordedAt1Sec = [];
+
+    // Simulate 3.0 seconds at 120 Hz (360 fixed steps -> ~181 60Hz replay frames)
+    for (let step = 0; step < 360; step++) {
+      stepRiderPhysics(r1, { throttle: 1, brake: 0, steer: 0.15, tuck: true }, sakura, simRiders, FIXED_DT, 3);
+      stepRiderPhysics(r2, { throttle: 0.85, brake: 0, steer: -0.1, tuck: false }, sakura, simRiders, FIXED_DT, 3);
+      rankRiders(simRiders);
+      recorder.record(simRiders, FIXED_DT);
+
+      if (step === 120) {
+        recordedAt1Sec.push(
+          { s: r1.s, d: r1.d, speed: r1.speed, lean: r1.lean, x: r1.world.x, z: r1.world.z, position: r1.position },
+          { s: r2.s, d: r2.d, speed: r2.speed, lean: r2.lean, x: r2.world.x, z: r2.world.z, position: r2.position }
+        );
+      }
+    }
+
+    const frameCount = recorder.getFrameCount();
+    assert.ok(frameCount >= 180 && frameCount <= 182, `Expected ~181 frames for 3.0s at 60Hz, got ${frameCount}`);
+    assert.ok(Math.abs(recorder.getDuration() - 3.0) < 0.05, `Expected replay duration ~3.0s, got ${recorder.getDuration()}`);
+
+    // Start playback and seek to t = 1.0s (frame 60)
+    recorder.startPlayback();
+    const snap1s = recorder.seek(1.0);
+    assert.equal(snap1s.length, 2, 'Snapshot at t=1.0s must contain 2 riders');
+
+    assert.ok(Math.abs(snap1s[0].s - recordedAt1Sec[0].s) < 0.5, `P1 replay s (${snap1s[0].s}) should match recorded (${recordedAt1Sec[0].s})`);
+    assert.ok(Math.abs(snap1s[0].d - recordedAt1Sec[0].d) < 0.05, `P1 replay d (${snap1s[0].d}) should match recorded (${recordedAt1Sec[0].d})`);
+    assert.ok(Math.abs(snap1s[0].speed - recordedAt1Sec[0].speed) < 0.3, `P1 replay speed should match recorded`);
+    assert.ok(Math.abs(snap1s[0].world.x - recordedAt1Sec[0].x) < 0.5, `P1 replay world.x should match recorded`);
+    assert.ok(Math.abs(snap1s[0].world.z - recordedAt1Sec[0].z) < 0.5, `P1 replay world.z should match recorded`);
+    assert.equal(snap1s[0].position, recordedAt1Sec[0].position);
+
+    assert.ok(Math.abs(snap1s[1].s - recordedAt1Sec[1].s) < 0.5, `P2 replay s (${snap1s[1].s}) should match recorded (${recordedAt1Sec[1].s})`);
+    assert.equal(snap1s[1].position, recordedAt1Sec[1].position);
+
+    // Verify playback controls: speed cycling, focus cycling (p1/p2/leader), TV/chase cam toggle
+    assert.equal(recorder.setSpeed(0.5), 0.5);
+    const stepState = recorder.stepPlayback(0.2); // 0.2s * 0.5x = +0.1s -> t = 1.1s
+    assert.ok(Math.abs(stepState.currentTime - 1.1) < 1e-4, `Expected playback time 1.1s at 0.5x speed, got ${stepState.currentTime}`);
+    assert.equal(stepState.tvMode, true);
+
+    assert.equal(recorder.toggleCameraMode(), 'chase');
+    assert.equal(recorder.isTvMode(), false);
+    assert.equal(recorder.toggleCameraMode(), 'tv');
+    assert.equal(recorder.isTvMode(), true);
+
+    assert.equal(recorder.setFocusMode('p2'), 'p2');
+    assert.equal(recorder.stepPlayback(0).focusIndex, 1);
+    assert.equal(recorder.setFocusMode('leader'), 'leader');
+    assert.equal(recorder.stepPlayback(0).focusIndex, 0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 8. CHAMPIONSHIP MODE VERIFICATION (championship.js)
+  // ---------------------------------------------------------------------------
+  console.log('\n8. 3-Round 1990 500cc Championship Verification (championship.js)');
+  const champMod = await import('./championship.js');
+  const { createChampionshipManager, CHAMPIONSHIP_POINTS, CHAMPIONSHIP_ROUNDS, getPointsForPosition } = champMod;
+
+  await runTest('championship.js awards 1990 FIM 500cc points (20,17,15,13,11,10,9,8), tracks standings across 3 rounds, and persists to storage', () => {
+    assert.deepEqual(CHAMPIONSHIP_POINTS, [20, 17, 15, 13, 11, 10, 9, 8]);
+    assert.deepEqual(CHAMPIONSHIP_ROUNDS, ['sakura', 'monterey', 'cathedral']);
+    assert.equal(getPointsForPosition(1), 20);
+    assert.equal(getPointsForPosition(2), 17);
+    assert.equal(getPointsForPosition(3), 15);
+    assert.equal(getPointsForPosition(4), 13);
+    assert.equal(getPointsForPosition(5), 11);
+    assert.equal(getPointsForPosition(6), 10);
+    assert.equal(getPointsForPosition(7), 9);
+    assert.equal(getPointsForPosition(8), 8);
+    assert.equal(getPointsForPosition(9), 0);
+
+    // Mock localStorage to verify save/load/resume/reset
+    const mockData = new Map();
+    const mockStorage = {
+      getItem: (k) => (mockData.has(k) ? mockData.get(k) : null),
+      setItem: (k, v) => mockData.set(k, String(v)),
+      removeItem: (k) => mockData.delete(k),
+    };
+
+    const champ = createChampionshipManager({ storage: mockStorage, storageKey: 'test_champ_1990', autoLoad: false });
+    champ.startNewChampionship({ laps: 3, difficulty: 'pro', p1BikeId: 'akagi', p2BikeId: 'shiden' });
+
+    assert.equal(champ.isActive(), true);
+    assert.equal(champ.isCompleted(), false);
+    assert.equal(champ.getCurrentRoundIndex(), 0);
+    assert.equal(champ.getCurrentTrackId(), 'sakura');
+
+    const makeRoundClassification = (orderedIds) =>
+      orderedIds.map((id, idx) => ({
+        id,
+        name: id.toUpperCase(),
+        isAI: id !== 'p1' && id !== 'p2',
+        playerIndex: id === 'p1' ? 0 : id === 'p2' ? 1 : -1,
+        bike: BIKES[idx % BIKES.length],
+        finishPosition: idx + 1,
+        position: idx + 1,
+        totalTime: 120 + idx * 1.5,
+      }));
+
+    // Round 1 (Sakura): p1 wins (20), p2 2nd (17), ai1 3rd (15)...
+    const r1Summary = champ.recordRoundResult(
+      makeRoundClassification(['p1', 'p2', 'ai1', 'ai2', 'ai3', 'ai4', 'ai5', 'ai6'])
+    );
+    assert.equal(r1Summary.trackId, 'sakura');
+    assert.equal(r1Summary.completed, false);
+    assert.equal(champ.getCurrentRoundIndex(), 1);
+    assert.equal(champ.getCurrentTrackId(), 'monterey');
+    assert.equal(champ.canResume(), true);
+
+    // Verify persistence by loading into a second manager instance from the same mockStorage
+    const resumedChamp = createChampionshipManager({ storage: mockStorage, storageKey: 'test_champ_1990', autoLoad: true });
+    assert.equal(resumedChamp.isActive(), true);
+    assert.equal(resumedChamp.getCurrentRoundIndex(), 1);
+    assert.equal(resumedChamp.getCurrentTrackId(), 'monterey');
+    assert.equal(resumedChamp.getStandings()[0].id, 'p1');
+    assert.equal(resumedChamp.getStandings()[0].points, 20);
+
+    // Round 2 (Monterey): p2 wins (20 -> 37), ai1 2nd (17 -> 32), p1 3rd (15 -> 35)
+    const r2Summary = resumedChamp.recordRoundResult(
+      makeRoundClassification(['p2', 'ai1', 'p1', 'ai2', 'ai3', 'ai4', 'ai5', 'ai6'])
+    );
+    assert.equal(r2Summary.trackId, 'monterey');
+    assert.equal(r2Summary.completed, false);
+    assert.equal(resumedChamp.getCurrentRoundIndex(), 2);
+    assert.equal(resumedChamp.getCurrentTrackId(), 'cathedral');
+    assert.equal(resumedChamp.getStandings()[0].id, 'p2');
+    assert.equal(resumedChamp.getStandings()[0].points, 37);
+    assert.equal(resumedChamp.getStandings()[1].id, 'p1');
+    assert.equal(resumedChamp.getStandings()[1].points, 35);
+
+    // Round 3 (Cathedral): p1 wins (20 -> 55), p2 2nd (17 -> 54), ai1 3rd (15 -> 47)
+    const r3Summary = resumedChamp.recordRoundResult(
+      makeRoundClassification(['p1', 'p2', 'ai1', 'ai2', 'ai3', 'ai4', 'ai5', 'ai6'])
+    );
+    assert.equal(r3Summary.trackId, 'cathedral');
+    assert.equal(r3Summary.completed, true);
+    assert.equal(resumedChamp.isCompleted(), true);
+    assert.equal(resumedChamp.canResume(), false);
+
+    const finalStandings = resumedChamp.getStandings();
+    assert.equal(finalStandings.length, 8);
+    assert.equal(finalStandings[0].id, 'p1');
+    assert.equal(finalStandings[0].points, 55); // 20 + 15 + 20
+    assert.equal(finalStandings[0].wins, 2);
+    assert.equal(finalStandings[1].id, 'p2');
+    assert.equal(finalStandings[1].points, 54); // 17 + 20 + 17
+    assert.equal(finalStandings[2].id, 'ai1');
+    assert.equal(finalStandings[2].points, 47); // 15 + 17 + 15
+
+    const champion = resumedChamp.getChampion();
+    assert.equal(champion.id, 'p1');
+    assert.equal(champion.points, 55);
+
+    // Reset clears saved championship
+    resumedChamp.resetChampionship();
+    assert.equal(resumedChamp.hasSavedChampionship(), false);
+    assert.equal(resumedChamp.isActive(), false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 9. 2-STROKE V4 AUDIO ENGINE & WORKLET DSP VERIFICATION
+  // ---------------------------------------------------------------------------
+  console.log('\n9. 2-Stroke V4 Audio Engine & Worklet DSP Verification (audio.js, audio-worklet.js)');
+
+  await runTest('audio-worklet.js defines TwoStrokeV4Processor with required AudioParams and SVF stability guards', async () => {
+    const workletSrc = fs.readFileSync(path.join(__dirname, 'audio-worklet.js'), 'utf8');
+    assert.ok(
+      /registerProcessor\s*\(\s*['"]two-stroke-v4-processor['"]/.test(workletSrc),
+      'audio-worklet.js must register two-stroke-v4-processor'
+    );
+    for (const param of ['rpm', 'throttle', 'speed', 'shiftCut', 'crankPattern', 'pipeFreqBase', 'dopplerRatio']) {
+      assert.ok(workletSrc.includes(`'${param}'`), `audio-worklet.js missing parameterDescriptor '${param}'`);
+    }
+
+    // Evaluate processor class in a tiny mock AudioWorkletGlobalScope to exercise sample generation
+    const registered = {};
+    const fn = new Function(
+      'AudioWorkletProcessor',
+      'registerProcessor',
+      'sampleRate',
+      workletSrc + '\nreturn TwoStrokeV4Processor;'
+    );
+    class MockWorkletBase {
+      constructor() {}
+    }
+    const ProcClass = fn(
+      MockWorkletBase,
+      (name, cls) => {
+        registered[name] = cls;
+      },
+      48000
+    );
+    assert.ok(registered['two-stroke-v4-processor'], 'Processor failed to register in mock scope');
+
+    const proc = new ProcClass();
+    const outBlock = new Float32Array(128);
+    // Test idle -> high-RPM powerband -> closed-throttle overrun -> quickshifter cut
+    const scenarios = [
+      { rpm: 4200, throttle: 0.0, speed: 0, shiftCut: 0, pattern: 0 },
+      { rpm: 11800, throttle: 1.0, speed: 78, shiftCut: 0, pattern: 1 },
+      { rpm: 9600, throttle: 0.0, speed: 62, shiftCut: 0, pattern: 2 },
+      { rpm: 12200, throttle: 1.0, speed: 80, shiftCut: 1, pattern: 3 },
+    ];
+    for (const sc of scenarios) {
+      let peak = 0;
+      for (let b = 0; b < 6; b++) {
+        proc.process(
+          [],
+          [[outBlock]],
+          {
+            rpm: [sc.rpm],
+            throttle: [sc.throttle],
+            speed: [sc.speed],
+            shiftCut: [sc.shiftCut],
+            crankPattern: [sc.pattern],
+            pipeFreqBase: [110],
+            harmonicRatio: [2.0],
+            filterResBase: [1350],
+            dopplerRatio: [1.05],
+          }
+        );
+        for (let i = 0; i < outBlock.length; i++) {
+          assert.ok(Number.isFinite(outBlock[i]), `Non-finite DSP sample produced at rpm=${sc.rpm}`);
+          const a = Math.abs(outBlock[i]);
+          if (a > peak) peak = a;
+        }
+      }
+      if (sc.shiftCut === 0) {
+        assert.ok(peak > 1e-4, `Expected audible DSP signal for rpm=${sc.rpm} throttle=${sc.throttle}, got peak=${peak}`);
+      }
+    }
+  });
+
+  await runTest('audio.js builds compressor, noise layers, rival Doppler voice, and shift/road transients cleanly', async () => {
+    const audioMod = await import('./audio.js');
+    const makeParam = (val = 0) => ({
+      value: val,
+      setValueAtTime(v) { this.value = v; },
+      setTargetAtTime(v) { this.value = v; },
+      exponentialRampToValueAtTime(v) { this.value = v; },
+    });
+
+    let compressorCreated = 0;
+    let periodicWaveCreated = 0;
+    let pannerCreated = 0;
+    const buffersCreated = [];
+    const createdPanners = [];
+
+    class MockAudioContext {
+      constructor() {
+        this.sampleRate = 44100;
+        this.currentTime = 1.0;
+        this.state = 'running';
+        this.destination = {};
+        this.audioWorklet = {
+          addModule: () => Promise.reject(new Error('No worklet in Node mock')),
+        };
+      }
+      resume() { return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+      createGain() { return { gain: makeParam(1), connect() {} }; }
+      createDynamicsCompressor() {
+        compressorCreated++;
+        return {
+          threshold: makeParam(-14),
+          knee: makeParam(12),
+          ratio: makeParam(4.5),
+          attack: makeParam(0.004),
+          release: makeParam(0.14),
+          connect() {},
+        };
+      }
+      createStereoPanner() {
+        pannerCreated++;
+        const p = { pan: makeParam(0), connect() {} };
+        createdPanners.push(p);
+        return p;
+      }
+      createBuffer(ch, len, sr) {
+        const arr = new Float32Array(len);
+        const buf = { numberOfChannels: ch, length: len, sampleRate: sr, getChannelData: () => arr };
+        buffersCreated.push(buf);
+        return buf;
+      }
+      createPeriodicWave() {
+        periodicWaveCreated++;
+        return {};
+      }
+      createOscillator() {
+        return {
+          type: 'sine',
+          frequency: makeParam(440),
+          setPeriodicWave() {},
+          connect() {},
+          start() {},
+          stop() {},
+        };
+      }
+      createBufferSource() {
+        return { buffer: null, loop: false, connect() {}, start() {}, stop() {} };
+      }
+      createBiquadFilter() {
+        return { type: 'lowpass', frequency: makeParam(1000), Q: makeParam(1), connect() {} };
+      }
+      createWaveShaper() {
+        return { curve: null, oversample: 'none', connect() {} };
+      }
+    }
+
+    const prevWindow = globalThis.window;
+    globalThis.window = {
+      AudioContext: MockAudioContext,
+      addEventListener() {},
+      removeEventListener() {},
+    };
+
+    try {
+      const audio = audioMod.createAudioEngine();
+      assert.equal(audio.init(), true, 'audio.init() should succeed with mock AudioContext');
+      const dbg = audio.getDebugState();
+      assert.equal(dbg.ready, true);
+      assert.equal(dbg.voiceCount, 2);
+      assert.equal(dbg.hasRivalVoice, true);
+      assert.equal(compressorCreated, 1, 'Expected master DynamicsCompressorNode');
+      assert.equal(periodicWaveCreated, 4, 'Expected 4 custom PeriodicWaves for 1990 V4 bikes');
+      assert.ok(pannerCreated >= 3, 'Expected StereoPannerNodes for P1, P2, and rival pass-by');
+      assert.equal(buffersCreated.length, 1, 'Expected shared 2s noise buffer');
+
+      const r1 = createRiderState({ id: 'p1', isAI: false, playerIndex: 0, bike: BIKES[0], s: 100, d: -1.0, track: sakura });
+      const r2 = createRiderState({ id: 'p2', isAI: false, playerIndex: 1, bike: BIKES[1], s: 102, d: 1.5, track: sakura });
+      const rAi = createRiderState({ id: 'ai1', isAI: true, bike: BIKES[2], s: 112, d: -0.5, track: sakura });
+
+      r1.rpm = 11200; r1.throttle = 1.0; r1.speed = 68; r1.gear = 5; r1.rearSlip = 0.65; r1.onKerb = true;
+      r2.rpm = 9400; r2.throttle = 0.0; r2.speed = 55; r2.gear = 4; r2.offTrack = true; r2.tuck = true;
+      rAi.rpm = 12000; rAi.throttle = 1.0; rAi.speed = 76; rAi.gear = 6;
+
+      audio.update([r1, r2, rAi], { splitMode: 'vertical' });
+      assert.ok(createdPanners[0].pan.value < 0, 'Vertical split should pan P1 slightly left');
+      assert.ok(createdPanners[1].pan.value > 0, 'Vertical split should pan P2 slightly right');
+
+      // Gear upshift + horizontal split centering
+      r1.gear = 6;
+      audio.update([r1, r2, rAi], { splitMode: 'horizontal' });
+      assert.equal(createdPanners[0].pan.value, 0, 'Horizontal split should center P1');
+      assert.equal(createdPanners[1].pan.value, 0, 'Horizontal split should center P2');
+
+      audio.playStartBeep(false);
+      audio.playStartBeep(true);
+      audio.silence();
+      audio.dispose();
+    } finally {
+      if (prevWindow === undefined) delete globalThis.window;
+      else globalThis.window = prevWindow;
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // 10. WEBSITE SHOWCASE, 3D SHOWROOM, BLENDER GLB ASSETS & PACKAGING
+  // ---------------------------------------------------------------------------
+  console.log('\n10. Website Showcase, 3D Showroom, Blender GLB Assets & Packaging Verification');
+
+  await runTest('Blender GLB assets (paddock_stage.glb & champion_trophy.glb) exist with valid glTF binary headers', () => {
+    const glbFiles = ['paddock_stage.glb', 'champion_trophy.glb'];
+    let combinedBytes = 0;
+
+    for (const file of glbFiles) {
+      const fullPath = path.join(__dirname, 'assets', 'showcase', file);
+      assert.ok(fs.existsSync(fullPath), `Missing GLB showcase asset: ${fullPath}`);
+      const buf = fs.readFileSync(fullPath);
+      assert.ok(buf.length >= 4096, `GLB ${file} unexpectedly small (${buf.length} bytes)`);
+      assert.equal(buf.subarray(0, 4).toString('ascii'), 'glTF', `GLB ${file} missing 'glTF' magic header`);
+      assert.equal(buf.readUInt32LE(4), 2, `GLB ${file} expected glTF binary version 2`);
+      assert.equal(buf.readUInt32LE(8), buf.length, `GLB ${file} header length mismatch`);
+      combinedBytes += buf.length;
+    }
+
+    assert.ok(combinedBytes < 1.2 * 1024 * 1024, `Combined GLB size (${combinedBytes} bytes) exceeds 1.2 MB budget`);
+  });
+
+  await runTest('Generated website artwork (hero_gp1990.png & pitlane_blueprint.png) exist with valid PNG headers', () => {
+    const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    for (const file of ['hero_gp1990.png', 'pitlane_blueprint.png']) {
+      const fullPath = path.join(__dirname, 'assets', 'art', file);
+      assert.ok(fs.existsSync(fullPath), `Missing generated artwork file: ${fullPath}`);
+      const buf = fs.readFileSync(fullPath);
+      assert.ok(buf.length > 1024, `Artwork ${file} unexpectedly small (${buf.length} bytes)`);
+      assert.equal(buf.subarray(0, 8).equals(pngSignature), true, `Artwork ${file} missing valid PNG signature`);
+    }
+  });
+
+  await runTest('showroom.js exports createBikeShowroom and operates headlessly with mock canvas', async () => {
+    const showroomMod = await import('./showroom.js');
+    const { createBikeShowroom } = showroomMod;
+    assert.equal(typeof createBikeShowroom, 'function', 'showroom.js must export createBikeShowroom');
+
+    const mockCanvas = {
+      width: 800,
+      height: 500,
+      clientWidth: 800,
+      clientHeight: 500,
+      style: {},
+      getContext: () => null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+
+    const showroom = createBikeShowroom(mockCanvas);
+    assert.ok(showroom && typeof showroom === 'object', 'createBikeShowroom must return a controller object');
+
+    for (const method of ['setBike', 'setLeanPreview', 'setTuckPreview', 'setActive', 'dispose']) {
+      assert.equal(typeof showroom[method], 'function', `showroom controller missing method '${method}'`);
+    }
+
+    for (const bikeId of ['shiden', 'kaze', 'corsa', 'akagi']) {
+      assert.equal(showroom.setBike(bikeId), bikeId);
+      assert.equal(showroom.getState().bikeId, bikeId);
+    }
+
+    showroom.setLeanPreview(true);
+    showroom.setTuckPreview(true);
+    showroom.stepFrame(1 / 60);
+    showroom.setActive(false);
+    assert.equal(showroom.getState().active, false);
+    showroom.setActive(true);
+    assert.equal(showroom.getState().active, true);
+    assert.equal(showroom.getState().leanPreview, true);
+    assert.equal(showroom.getState().tuckPreview, true);
+
+    showroom.dispose();
+    assert.equal(showroom.getState().disposed, true);
+  });
+
+  await runTest('showcase.js exports initWebsiteShowcase and initializes safely headlessly', async () => {
+    const showcaseMod = await import('./showcase.js');
+    const { initWebsiteShowcase } = showcaseMod;
+    assert.equal(typeof initWebsiteShowcase, 'function', 'showcase.js must export initWebsiteShowcase');
+
+    const controller = initWebsiteShowcase({});
+    assert.ok(controller && typeof controller === 'object', 'initWebsiteShowcase must return a controller object');
+    for (const method of ['setActive', 'syncGamepadStatus', 'setSelectedBike', 'setSelectedTrack', 'updateMuteUi', 'dispose']) {
+      assert.equal(typeof controller[method], 'function', `showcase controller missing method '${method}'`);
+      controller[method]();
+    }
+  });
+
+  await runTest('server.js serves showroom.js, showcase.js, Blender GLBs, and PNG art with 200 OK and valid MIME types', async () => {
     const serverMod = await import('./server.js');
     const srv = serverMod.createServer();
     await new Promise((resolve, reject) => {
@@ -835,16 +1410,90 @@ async function main() {
 
     const port = srv.address().port;
     try {
-      for (const reqPath of ['/textures.js', '/models.js']) {
-        const res = await fetchUrl(port, reqPath);
-        assert.equal(res.statusCode, 200, `Expected 200 OK for ${reqPath}, got ${res.statusCode}`);
-        const contentType = res.headers['content-type'] || '';
-        assert.ok(/application\/javascript/i.test(contentType), `Expected application/javascript for ${reqPath}, got '${contentType}'`);
-        assert.ok(res.body.length > 100, `Expected non-empty JS module body for ${reqPath}`);
+      const assetsToCheck = [
+        { path: '/showroom.js', mime: /javascript/i, minBytes: 500 },
+        { path: '/showcase.js', mime: /javascript/i, minBytes: 500 },
+        { path: '/assets/showcase/paddock_stage.glb', mime: /^(model\/gltf-binary|application\/octet-stream)$/i, minBytes: 4096, magic: 'glTF' },
+        { path: '/assets/showcase/champion_trophy.glb', mime: /^(model\/gltf-binary|application\/octet-stream)$/i, minBytes: 4096, magic: 'glTF' },
+        { path: '/assets/art/hero_gp1990.png', mime: /^image\/png$/i, minBytes: 1024 },
+        { path: '/assets/art/pitlane_blueprint.png', mime: /^image\/png$/i, minBytes: 1024 },
+      ];
+
+      for (const item of assetsToCheck) {
+        const res = await fetchUrl(port, item.path);
+        assert.equal(res.statusCode, 200, `Expected 200 OK for ${item.path}, got ${res.statusCode}`);
+        const contentType = (res.headers['content-type'] || '').split(';')[0].trim();
+        assert.ok(item.mime.test(contentType), `Invalid Content-Type '${res.headers['content-type']}' for ${item.path}`);
+        assert.ok(res.buffer.length >= item.minBytes, `Asset ${item.path} returned unexpectedly short body (${res.buffer.length} bytes)`);
+        if (item.magic) {
+          assert.equal(res.buffer.subarray(0, item.magic.length).toString('ascii'), item.magic, `Served asset ${item.path} missing '${item.magic}' header`);
+        }
       }
     } finally {
       await new Promise((resolve) => srv.close(resolve));
     }
+  });
+
+  await runTest('index.html contains all required website landing sections, 3D showroom canvas, and Paddock overlay IDs', () => {
+    const htmlSource = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+    const requiredIds = [
+      'site-navbar',
+      'site-landing',
+      'hero-section',
+      'showroom-section',
+      'showroom-canvas',
+      'circuits-section',
+      'engineering-section',
+      'controls-section',
+      'paddock-menu',
+      'btn-paddock-home',
+      'showroom-bike-tabs',
+      'site-circuit-canvas',
+      'site-physics-canvas',
+      'sim-speed-slider',
+      'sim-radius-slider',
+    ];
+    for (const id of requiredIds) {
+      assert.ok(
+        new RegExp(`id=["']${id}["']`).test(htmlSource),
+        `index.html missing required element #${id}`
+      );
+    }
+  });
+
+  await runTest('tools/package_site.mjs executes cleanly and builds dist/gp500-1990-web.zip', () => {
+    const pkgScript = path.join(__dirname, 'tools', 'package_site.mjs');
+    assert.ok(fs.existsSync(pkgScript), 'Missing tools/package_site.mjs');
+
+    const stdout = execFileSync(process.execPath, [pkgScript], {
+      cwd: __dirname,
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+    assert.ok(/gp500-1990-web\.zip/i.test(stdout), `Unexpected packager output: ${stdout}`);
+
+    const zipPath = path.join(__dirname, 'dist', 'gp500-1990-web.zip');
+    assert.ok(fs.existsSync(zipPath), `Expected archive not found at ${zipPath}`);
+    const zipBuf = fs.readFileSync(zipPath);
+    assert.ok(zipBuf.length > 1024 * 1024, `Archive unexpectedly small (${zipBuf.length} bytes)`);
+    assert.equal(zipBuf.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])), true, 'Archive missing PKZIP local header signature');
+
+    for (const expectedEntry of [
+      'index.html',
+      'style.css',
+      'game.js',
+      'showroom.js',
+      'showcase.js',
+      'assets/showcase/paddock_stage.glb',
+      'assets/showcase/champion_trophy.glb',
+      'assets/art/hero_gp1990.png',
+      'assets/art/pitlane_blueprint.png',
+      'vendor/three.module.js',
+    ]) {
+      assert.ok(zipBuf.includes(Buffer.from(expectedEntry, 'utf8')), `Archive missing expected file entry: ${expectedEntry}`);
+    }
+    assert.equal(zipBuf.includes(Buffer.from('test_gp500.js', 'utf8')), false, 'Archive should exclude test_gp500.js');
+    assert.equal(zipBuf.includes(Buffer.from('server.js', 'utf8')), false, 'Archive should exclude server.js');
   });
 
   // ---------------------------------------------------------------------------

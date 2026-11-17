@@ -1,0 +1,8 @@
+# Build / packaged artifacts & temporary verification profiles
+gp500-1990/dist/
+.browser_profile/
+*.log
+.env
+.env*.local
+.vercel
+node_modules/

@@ -1,9 +1,10 @@
 /**
  * Dual-Player Input Manager for 500cc Grand Prix '90
- * Supports simultaneous 2-Player Keyboard (conflict-free layout) + Dual Gamepad API.
+ * Supports simultaneous 2-Player Keyboard (conflict-free layout, no Shift/Ctrl/Alt) + Dual Gamepad API + Haptic Rumble.
  *
- * Player 1 Keyboard: KeyW (throttle), KeyS (brake), KeyA / KeyD (lean left/right), Space (tuck-in)
- * Player 2 Keyboard: ArrowUp (throttle), ArrowDown (brake), ArrowLeft / ArrowRight (lean left/right), Enter / Numpad0 (tuck-in)
+ * Player 1 Keyboard: KeyW (throttle), KeyS (brake), KeyA / KeyD (lean left/right), Space (tuck-in), KeyC (camera cycle)
+ * Player 2 Keyboard: ArrowUp (throttle), ArrowDown (brake), ArrowLeft / ArrowRight (lean left/right), Enter / Numpad0 (tuck-in), Period (camera cycle)
+ * Gamepad: Left Stick / D-Pad (lean), RT / A (throttle), LT / B (brake), X / RB (tuck-in), Y / Button 3 (camera cycle), Start / Button 9 (pause)
  * Shortcut Keys: KeyV (split orientation), KeyP / Escape (pause), KeyM (audio mute)
  */
 
@@ -13,26 +14,30 @@ export const PLAYER_KEYMAPS = [
     brake: ['KeyS'],
     left: ['KeyA'],
     right: ['KeyD'],
-    tuck: ['Space']
+    tuck: ['Space'],
+    camera: ['KeyC']
   },
   {
     throttle: ['ArrowUp'],
     brake: ['ArrowDown'],
     left: ['ArrowLeft'],
     right: ['ArrowRight'],
-    tuck: ['Enter', 'Numpad0', 'NumpadEnter']
+    tuck: ['Enter', 'Numpad0', 'NumpadEnter'],
+    camera: ['Period']
   }
 ];
 
 export const SHORTCUT_KEYS = {
   splitToggle: ['KeyV'],
   pauseToggle: ['KeyP', 'Escape'],
-  muteToggle: ['KeyM']
+  muteToggle: ['KeyM'],
+  p1CameraCycle: ['KeyC'],
+  p2CameraCycle: ['Period']
 };
 
 const GAME_CONTROL_CODES = new Set([
-  'KeyW', 'KeyS', 'KeyA', 'KeyD', 'Space',
-  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Numpad0', 'NumpadEnter',
+  'KeyW', 'KeyS', 'KeyA', 'KeyD', 'Space', 'KeyC',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Numpad0', 'NumpadEnter', 'Period',
   'KeyV', 'KeyP', 'Escape', 'KeyM'
 ]);
 
@@ -53,29 +58,46 @@ function applyDeadzone(value, deadzone = 0.12) {
  * @param {() => void} [callbacks.onToggleSplit]
  * @param {() => void} [callbacks.onTogglePause]
  * @param {() => void} [callbacks.onToggleMute]
+ * @param {(slot: number) => void} [callbacks.onCycleCamera]
  */
 export function createInputManager(callbacks = {}) {
   const pressedKeys = new Set();
   const pendingActions = {
     toggleSplit: false,
     togglePause: false,
-    toggleMute: false
+    toggleMute: false,
+    cycleCameraP1: false,
+    cycleCameraP2: false
   };
 
   let handlers = {
     onToggleSplit: callbacks.onToggleSplit || null,
     onTogglePause: callbacks.onTogglePause || null,
-    onToggleMute: callbacks.onToggleMute || null
+    onToggleMute: callbacks.onToggleMute || null,
+    onCycleCamera: callbacks.onCycleCamera || null
   };
 
-  // Previous gamepad button states for edge-triggered pause/split shortcuts if needed
+  // Previous gamepad button states for edge-triggered pause (btn 9) and camera cycle (btn 3 = Y)
   const prevPadPause = [false, false];
+  const prevPadCamera = [false, false];
+  const lastRumbleTime = [0, 0];
 
   function isAnyKeyDown(codes) {
     for (let i = 0; i < codes.length; i++) {
       if (pressedKeys.has(codes[i])) return true;
     }
     return false;
+  }
+
+  function triggerCameraCycle(slot) {
+    if (slot === 0) {
+      pendingActions.cycleCameraP1 = true;
+    } else if (slot === 1) {
+      pendingActions.cycleCameraP2 = true;
+    }
+    if (typeof handlers.onCycleCamera === 'function') {
+      handlers.onCycleCamera(slot);
+    }
   }
 
   function onKeyDown(event) {
@@ -111,6 +133,10 @@ export function createInputManager(callbacks = {}) {
         if (typeof handlers.onToggleMute === 'function') {
           handlers.onToggleMute();
         }
+      } else if (SHORTCUT_KEYS.p1CameraCycle.includes(code)) {
+        triggerCameraCycle(0);
+      } else if (SHORTCUT_KEYS.p2CameraCycle.includes(code)) {
+        triggerCameraCycle(1);
       }
     }
   }
@@ -156,6 +182,7 @@ export function createInputManager(callbacks = {}) {
     const pad = pads[playerIndex];
     if (!pad || !pad.connected) {
       prevPadPause[playerIndex] = false;
+      prevPadCamera[playerIndex] = false;
       return { throttle: 0, brake: 0, steer: 0, tuck: false, connected: false, id: '' };
     }
 
@@ -176,7 +203,7 @@ export function createInputManager(callbacks = {}) {
     };
 
     // Left Stick X (axes[0]) or D-Pad Left (14) / Right (15)
-    let stickSteer = applyDeadzone(axes[0] || 0, 0.12);
+    const stickSteer = applyDeadzone(axes[0] || 0, 0.12);
     const dpadSteer = (btnPressed(15) ? 1 : 0) - (btnPressed(14) ? 1 : 0);
     const steer = clamp(Math.abs(stickSteer) >= Math.abs(dpadSteer) ? stickSteer : dpadSteer, -1, 1);
 
@@ -188,6 +215,13 @@ export function createInputManager(callbacks = {}) {
 
     // X (Button 2) or RB (Button 5) for tuck-in
     const tuck = btnPressed(2) || btnPressed(5);
+
+    // Y button (Button 3) edge-triggered camera mode cycle
+    const camNow = btnPressed(3);
+    if (camNow && !prevPadCamera[playerIndex]) {
+      triggerCameraCycle(playerIndex);
+    }
+    prevPadCamera[playerIndex] = camNow;
 
     // Start button (Button 9) edge-triggered pause
     const startNow = btnPressed(9);
@@ -207,6 +241,94 @@ export function createInputManager(callbacks = {}) {
       connected: true,
       id: pad.id || `Gamepad ${playerIndex + 1}`
     };
+  }
+
+  /**
+   * Triggers gamepad haptic rumble if gamepad.vibrationActuator is supported.
+   * @param {number} playerIndex 0 or 1
+   * @param {{ duration?: number, weakMagnitude?: number, strongMagnitude?: number }} [effect]
+   */
+  function triggerGamepadRumble(playerIndex = 0, effect = {}) {
+    const idx = playerIndex === 1 ? 1 : 0;
+    const pads = getConnectedGamepads();
+    const pad = pads[idx];
+    if (!pad || !pad.vibrationActuator) return false;
+
+    const actuator = pad.vibrationActuator;
+    const duration = clamp(Number(effect.duration) || 80, 20, 500);
+    const weakMagnitude = clamp(Number(effect.weakMagnitude) || 0, 0, 1);
+    const strongMagnitude = clamp(Number(effect.strongMagnitude) || 0, 0, 1);
+    if (weakMagnitude <= 0.01 && strongMagnitude <= 0.01) return false;
+
+    try {
+      if (typeof actuator.playEffect === 'function') {
+        const type = actuator.type || 'dual-rumble';
+        const res = actuator.playEffect(type, {
+          startDelay: 0,
+          duration,
+          weakMagnitude,
+          strongMagnitude
+        });
+        if (res && typeof res.catch === 'function') {
+          res.catch(() => {});
+        }
+        return true;
+      }
+      if (typeof actuator.pulse === 'function') {
+        const res = actuator.pulse(Math.max(weakMagnitude, strongMagnitude), duration);
+        if (res && typeof res.catch === 'function') {
+          res.catch(() => {});
+        }
+        return true;
+      }
+    } catch (_) {
+      // Ignore browser permission or unsupported actuator errors
+    }
+    return false;
+  }
+
+  /**
+   * Evaluates rider telemetry (kerbs, highside, powerslide) and triggers gamepad vibrationActuator rumble.
+   * @param {number} playerIndex 0 or 1
+   * @param {object} rider
+   * @param {number} [nowMs]
+   */
+  function updateRiderRumble(playerIndex = 0, rider = null, nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now()) {
+    if (!rider) return false;
+    const idx = playerIndex === 1 ? 1 : 0;
+    if (nowMs - lastRumbleTime[idx] < 55) return false;
+
+    const highside = (rider.highsideTimer || 0) > 0;
+    const rearSlip = rider.rearSlip || 0;
+    const powerslide = rearSlip > 0.28;
+    const onKerb = Boolean(rider.onKerb && (rider.speed || 0) > 5);
+
+    if (!highside && !powerslide && !onKerb) {
+      return false;
+    }
+
+    let strongMagnitude = 0;
+    let weakMagnitude = 0;
+    let duration = 75;
+
+    if (highside) {
+      strongMagnitude = 1.0;
+      weakMagnitude = 0.9;
+      duration = 130;
+    } else if (powerslide) {
+      const slipIntensity = clamp((rearSlip - 0.25) / 0.75, 0.25, 1.0);
+      strongMagnitude = clamp(0.35 + slipIntensity * 0.55, 0.3, 0.9);
+      weakMagnitude = clamp(0.25 + slipIntensity * 0.5, 0.25, 0.75);
+      duration = 90;
+    } else if (onKerb) {
+      const speedNorm = clamp((rider.speed || 0) / 70, 0.2, 1.0);
+      strongMagnitude = 0.22 * speedNorm;
+      weakMagnitude = clamp(0.3 + speedNorm * 0.5, 0.25, 0.8);
+      duration = 65;
+    }
+
+    lastRumbleTime[idx] = nowMs;
+    return triggerGamepadRumble(idx, { duration, weakMagnitude, strongMagnitude });
   }
 
   /**
@@ -249,11 +371,15 @@ export function createInputManager(callbacks = {}) {
     const snapshot = {
       toggleSplit: pendingActions.toggleSplit,
       togglePause: pendingActions.togglePause,
-      toggleMute: pendingActions.toggleMute
+      toggleMute: pendingActions.toggleMute,
+      cycleCameraP1: pendingActions.cycleCameraP1,
+      cycleCameraP2: pendingActions.cycleCameraP2
     };
     pendingActions.toggleSplit = false;
     pendingActions.togglePause = false;
     pendingActions.toggleMute = false;
+    pendingActions.cycleCameraP1 = false;
+    pendingActions.cycleCameraP2 = false;
     return snapshot;
   }
 
@@ -266,7 +392,15 @@ export function createInputManager(callbacks = {}) {
 
   function setKeyState(code, isDown) {
     if (isDown) {
+      const wasDown = pressedKeys.has(code);
       pressedKeys.add(code);
+      if (!wasDown) {
+        if (SHORTCUT_KEYS.p1CameraCycle.includes(code)) {
+          triggerCameraCycle(0);
+        } else if (SHORTCUT_KEYS.p2CameraCycle.includes(code)) {
+          triggerCameraCycle(1);
+        }
+      }
     } else {
       pressedKeys.delete(code);
     }
@@ -277,6 +411,8 @@ export function createInputManager(callbacks = {}) {
     pendingActions.toggleSplit = false;
     pendingActions.togglePause = false;
     pendingActions.toggleMute = false;
+    pendingActions.cycleCameraP1 = false;
+    pendingActions.cycleCameraP2 = false;
   }
 
   function dispose() {
@@ -291,10 +427,12 @@ export function createInputManager(callbacks = {}) {
   return {
     getPlayerInput,
     getGamepadStatus,
+    triggerGamepadRumble,
+    updateRiderRumble,
     consumeActions,
     setCallbacks,
     setKeyState,
-     isKeyDown: (code) => pressedKeys.has(code),
+    isKeyDown: (code) => pressedKeys.has(code),
     reset,
     dispose
   };

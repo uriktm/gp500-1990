@@ -1028,9 +1028,9 @@
   BubbleShooterGame.prototype.init = function () {
     this.loadHighScore();
     this.cacheDomElements();
+    this.setupCanvases();
     this.bindEvents();
     this.bindHudButtons();
-    this.setupCanvases();
 
     // Start with pre-rendered board in background behind start modal
     this.startLevel(1, false);
