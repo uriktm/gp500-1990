@@ -1,0 +1,68 @@
+{
+  "source": "Poly Haven (CC0)",
+  "hdri": "alps_field",
+  "trees": [
+    {
+      "id": "island_tree_01",
+      "file": "tree_island_tree_01.webp",
+      "heightM": 5.027,
+      "quadSizeM": 5.128
+    },
+    {
+      "id": "island_tree_02",
+      "file": "tree_island_tree_02.webp",
+      "heightM": 3.407,
+      "quadSizeM": 4.292
+    },
+    {
+      "id": "searsia_lucida",
+      "file": "tree_searsia_lucida.webp",
+      "heightM": 2.339,
+      "quadSizeM": 4.873
+    }
+  ],
+  "sky": {
+    "file": "sky_band.jpg",
+    "vMax": 0.53,
+    "hazeColor": [
+      0.415,
+      0.4144,
+      0.3398
+    ]
+  },
+  "sun": {
+    "u": 0.6001,
+    "vFromTop": 0.2666,
+    "elevationDeg": 42.01
+  },
+  "env": {
+    "file": "env.hdr"
+  },
+  "surfaces": {
+    "asphalt": {
+      "diff": "asphalt_diff.jpg",
+      "nor": "asphalt_nor.jpg",
+      "rough": "asphalt_rough.jpg"
+    },
+    "grass": {
+      "diff": "grass_diff.jpg",
+      "nor": "grass_nor.jpg",
+      "rough": "grass_rough.jpg"
+    },
+    "gravel": {
+      "diff": "gravel_diff.jpg",
+      "nor": "gravel_nor.jpg",
+      "rough": "gravel_rough.jpg"
+    },
+    "concrete": {
+      "diff": "concrete_diff.jpg",
+      "nor": "concrete_nor.jpg",
+      "rough": "concrete_rough.jpg"
+    },
+    "metal": {
+      "diff": "metal_diff.jpg",
+      "nor": "metal_nor.jpg",
+      "rough": "metal_rough.jpg"
+    }
+  }
+}

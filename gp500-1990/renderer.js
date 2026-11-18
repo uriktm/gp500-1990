@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from './vendor/addons/environments/RoomEnvironment.js';
 import { createTextureSet, createBikeLiveryTexture } from './textures.js';
 import { createDetailedBikeRig, updateDetailedBikeRig } from './models.js';
+import { loadPhotoScenery, applyPhotoScenery } from './scenery.js';
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
@@ -318,6 +319,19 @@ export function createRaceRenderer(canvas) {
   const cameraModes = ['chase', 'chase'];
   let currentSplitMode = 'horizontal';
   let trackRoot = null;
+
+  // Photographic sky, ground textures and billboard trees (scenery.js); procedural until loaded.
+  let photoScenery = null;
+  const sunDirection = SUN_OFFSET.clone().normalize();
+  const applyPhotoIfReady = () => {
+    if (photoScenery) applyPhotoScenery(photoScenery, { scene, trackRoot, skyGroup, sunDirection });
+  };
+  if (hasWebGL && typeof window !== 'undefined') {
+    loadPhotoScenery(renderer).then((photo) => {
+      photoScenery = photo;
+      applyPhotoIfReady();
+    });
+  }
   let currentTrackRef = null;
   const tvCameraPosts = [];
   let activeTvPostIndex = -1;
@@ -621,6 +635,11 @@ export function createRaceRenderer(canvas) {
   // ---------------------------------------------------------------------------
   // PHOTOREALISTIC TEXTURED CIRCUIT & 1990 GP ARCHITECTURE
   // ---------------------------------------------------------------------------
+  function tagRole(obj, role) {
+    obj.userData.sceneryRole = role;
+    return obj;
+  }
+
   function buildTrackScene(track) {
     currentTrackRef = track;
     if (trackRoot) {
@@ -654,6 +673,7 @@ export function createRaceRenderer(canvas) {
     groundMesh.rotation.x = -Math.PI / 2;
     groundMesh.position.y = -0.75;
     groundMesh.receiveShadow = true;
+    groundMesh.userData.sceneryRole = 'ground';
     trackRoot.add(groundMesh);
 
     const samples = track.samples || [];
@@ -898,14 +918,14 @@ export function createRaceRenderer(canvas) {
     }
 
     trackRoot.add(
-      buildUVRibbonMesh(asphaltPos, asphaltNrm, asphaltUv, asphaltCol, {
+      tagRole(buildUVRibbonMesh(asphaltPos, asphaltNrm, asphaltUv, asphaltCol, {
         map: textureSet?.asphalt || null,
         color: 0xffffff,
         roughness: 0.72,
         metalness: 0.04,
         envMapIntensity: 0.30,
         vertexColors: true
-      })
+      }), 'asphalt')
     );
 
     if (kerbRedPos.length > 0) {
@@ -935,25 +955,25 @@ export function createRaceRenderer(canvas) {
     }
 
     trackRoot.add(
-      buildUVRibbonMesh(gravelPos, gravelNrm, gravelUv, gravelCol, {
+      tagRole(buildUVRibbonMesh(gravelPos, gravelNrm, gravelUv, gravelCol, {
         map: textureSet?.gravel || null,
         color: 0xffffff,
         roughness: 0.92,
         metalness: 0.0,
         envMapIntensity: 0.25,
         vertexColors: true
-      })
+      }), 'gravel')
     );
 
     trackRoot.add(
-      buildUVRibbonMesh(skirtPos, skirtNrm, skirtUv, skirtCol, {
+      tagRole(buildUVRibbonMesh(skirtPos, skirtNrm, skirtUv, skirtCol, {
         map: textureSet?.grass || null,
         color: 0xffffff,
         roughness: 0.90,
         metalness: 0.0,
         envMapIntensity: 0.25,
         vertexColors: true
-      })
+      }), 'grassSkirt')
     );
 
     // 3. Checkered Start/Finish Line & Painted P1..P8 Starting Grid Boxes
@@ -1123,11 +1143,11 @@ export function createRaceRenderer(canvas) {
         bayGroup.rotation.y = -smp.tangentAngle;
 
         const pitD = halfW + kerbW + 5.2;
-        const garageMesh = new THREE.Mesh(bayGeo, pitBuildingMat);
+        const garageMesh = tagRole(new THREE.Mesh(bayGeo, pitBuildingMat), 'pitFacade');
         garageMesh.position.set(0, 3.8, pitD);
         bayGroup.add(garageMesh);
 
-        const roofCanopy = new THREE.Mesh(canopyGeo, concreteMat);
+        const roofCanopy = tagRole(new THREE.Mesh(canopyGeo, concreteMat), 'concrete');
         roofCanopy.position.set(0, 7.75, pitD - 0.9);
         bayGroup.add(roofCanopy);
 
@@ -1149,7 +1169,7 @@ export function createRaceRenderer(canvas) {
       towerGroup.rotation.y = -twSmp.tangentAngle;
       const towerD = halfW + kerbW + 6.5;
 
-      const towerCore = new THREE.Mesh(new THREE.BoxGeometry(10, 17, 9), concreteMat);
+      const towerCore = tagRole(new THREE.Mesh(new THREE.BoxGeometry(10, 17, 9), concreteMat), 'concrete');
       towerCore.position.set(0, 8.5, towerD);
       towerGroup.add(towerCore);
 
@@ -1321,7 +1341,7 @@ export function createRaceRenderer(canvas) {
       standGroup.position.set(s.x + d * s.nx, s.y, s.z + d * s.nz);
       standGroup.rotation.y = -s.tangentAngle + (side > 0 ? Math.PI : 0);
 
-      const baseMesh = new THREE.Mesh(baseGeo, standBaseMat);
+      const baseMesh = tagRole(new THREE.Mesh(baseGeo, standBaseMat), 'standBase');
       baseMesh.position.set(0, 2.1, -1.2);
       standGroup.add(baseMesh);
 
@@ -1330,7 +1350,7 @@ export function createRaceRenderer(canvas) {
       crowdMesh.rotation.x = 0.38;
       standGroup.add(crowdMesh);
 
-      const roofMesh = new THREE.Mesh(roofGeo, canopyRoofMat);
+      const roofMesh = tagRole(new THREE.Mesh(roofGeo, canopyRoofMat), 'standRoof');
       roofMesh.position.set(0, 7.2, 0.2);
       roofMesh.rotation.x = -0.08;
       standGroup.add(roofMesh);
@@ -1477,14 +1497,17 @@ export function createRaceRenderer(canvas) {
     const treeStep = 12;
     const treePositions = [];
     const minTreeClearSq = (halfW + 14) * (halfW + 14);
+    const treeRows = [20, 38, 58];
     for (let i = 0; i < n; i += treeStep) {
-      const s = samples[i];
-      for (const side of [-1, 1]) {
-        const d = side * (halfW + 20 + ((i * 7) % 14));
-        const tx = s.x + d * s.nx;
-        const tz = s.z + d * s.nz;
-        if (isClearOfTrack(tx, tz, minTreeClearSq)) {
-          treePositions.push({ tx, ty: s.y, tz, side });
+      for (let row = 0; row < treeRows.length; row++) {
+        const s = samples[(i + row * 5) % n];
+        for (const side of [-1, 1]) {
+          const d = side * (halfW + treeRows[row] + ((i * 7 + row * 11) % 14));
+          const tx = s.x + d * s.nx;
+          const tz = s.z + d * s.nz;
+          if (isClearOfTrack(tx, tz, minTreeClearSq)) {
+            treePositions.push({ tx, ty: s.y, tz, side });
+          }
         }
       }
     }
@@ -1532,6 +1555,10 @@ export function createRaceRenderer(canvas) {
     trunksInst.computeBoundingSphere();
     lowerCrownInst.computeBoundingSphere();
     upperCrownInst.computeBoundingSphere();
+    for (const inst of [trunksInst, lowerCrownInst, upperCrownInst]) {
+      tagRole(inst, 'proceduralTree');
+    }
+    trunksInst.userData.treePositions = treePositions;
     trackRoot.add(trunksInst, lowerCrownInst, upperCrownInst);
 
     // D. Distant 3D Mountain Ridges around the Circuit's Actual Bounding Perimeter
@@ -1589,7 +1616,8 @@ export function createRaceRenderer(canvas) {
     mountainsInst.instanceMatrix.needsUpdate = true;
     if (mountainsInst.instanceColor) mountainsInst.instanceColor.needsUpdate = true;
     mountainsInst.computeBoundingSphere();
-    trackRoot.add(mountainsInst);
+    trackRoot.add(tagRole(mountainsInst, 'mountains'));
+    applyPhotoIfReady();
   }
 
   // ---------------------------------------------------------------------------

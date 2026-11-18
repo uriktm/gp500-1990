@@ -739,16 +739,12 @@ function buildCrowdTexture() {
     const crowdHeight = 224;
     const rowH = crowdHeight / numRows;
 
+    // Real crowds are mostly dark, denim and neutral clothing with the odd team color.
     const shirtPalette = [
-      '#e01e2b', // Akagi Red
-      '#f5c542', // Championship Gold
-      '#1854c4', // Shiden Blue
-      '#00a8e8', // Kaze Cyan
-      '#f4f4f0', // Classic White
-      '#ff6b1a', // Retro Orange
-      '#24a848', // Emerald Green
-      '#d82880', // 1990 Magenta
-      '#22262e'  // Black Team Jacket
+      '#23262c', '#2c3442', '#3b4a63', '#4a5568', '#5b6472', // black, navy, denim, greys
+      '#7a7266', '#9a8f7c', '#c9c4b8', '#e6e3dc', // khaki, beige, off-white
+      '#23262c', '#2c3442', '#3b4a63', '#e6e3dc',
+      '#8e2a2a', '#2f4f86', '#b8923a' // muted team red, blue, gold
     ];
     const skinTones = ['#f2c6a0', '#e0ac82', '#c68b59', '#f7d7b8', '#8d5832'];
 
@@ -801,7 +797,7 @@ function buildCrowdTexture() {
       { bg: '#ffffff', fg: '#151515', text: 'GP' }
     ];
 
-    for (let f = 0; f < 18; f++) {
+    for (let f = 0; f < 6; f++) {
       const fx = 18 + rng() * (width - 52);
       const fy = 14 + rng() * (crowdHeight - 44);
       const fw = 22 + rng() * 14;
