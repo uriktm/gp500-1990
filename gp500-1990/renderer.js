@@ -1990,6 +1990,14 @@ export function createRaceRenderer(canvas, opts = {}) {
     syncRiders(riders, dt);
     updateParticles(dt);
 
+    // Phones report stale sizes in the resize event after a rotation, so follow the canvas's real size
+    if (canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0 && typeof renderer.getSize === 'function') {
+      renderer.getSize(viewportSize);
+      if (viewportSize.x !== canvas.clientWidth || viewportSize.y !== canvas.clientHeight) {
+        renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+      }
+    }
+
     // Viewports are in CSS pixels; three.js multiplies them by the pixel ratio itself
     const cssSize = typeof renderer.getSize === 'function' ? renderer.getSize(viewportSize) : null;
     const width = (cssSize && cssSize.x) || (canvas && canvas.width) || 1280;

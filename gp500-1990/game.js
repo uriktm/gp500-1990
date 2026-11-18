@@ -232,6 +232,7 @@ export function initGame() {
   let gameState = GAME_STATES.MENU;
   let viewMode = 'site'; // 'site' | 'paddock' | 'race'
   let stateBeforePause = GAME_STATES.RACING;
+  let pausedForPortrait = false;
   let stateBeforeReplay = GAME_STATES.RESULTS;
   let currentTrack = createTrack(config.trackId);
   let riders = [];
@@ -1172,6 +1173,7 @@ export function initGame() {
       return;
     }
     if (gameState !== GAME_STATES.PAUSED) return;
+    pausedForPortrait = false;
     if (pauseOverlay) pauseOverlay.classList.add('hidden');
     gameState = stateBeforePause || GAME_STATES.RACING;
     lastFrameTime = performance.now();
@@ -1477,10 +1479,49 @@ export function initGame() {
       if (btn) btn.textContent = 'QUICK RACE';
     });
 
-    // Turning the phone upright mid-race pauses it behind the rotate prompt
-    portraitQuery.addEventListener('change', () => {
-      if (portraitQuery.matches && !onlineRole && gameState === GAME_STATES.RACING) {
+    document.getElementById('btn-hud-pause')?.classList.add('touch-hide');
+    const resumeBtn = document.getElementById('btn-resume');
+    if (resumeBtn) resumeBtn.textContent = 'RESUME RACE';
+    const muteBtn = document.getElementById('btn-pause-mute');
+    if (muteBtn) muteBtn.textContent = 'SOUND ON / OFF';
+    const restartBtn = document.getElementById('btn-pause-restart');
+    if (restartBtn) restartBtn.textContent = 'RESTART RACE';
+    const exitBtn = document.getElementById('btn-pause-paddock');
+    if (exitBtn) exitBtn.textContent = 'EXIT TO MAIN MENU';
+
+    // A tap that lands while another finger still holds a pedal never becomes a click
+    resumeBtn?.addEventListener('pointerup', resumeFromPause);
+    const touchPauseBtn = document.getElementById('btn-touch-pause');
+    touchPauseBtn?.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (gameState === GAME_STATES.RACING || gameState === GAME_STATES.COUNTDOWN) {
+        pausedForPortrait = false;
         handlePauseShortcut();
+      }
+    });
+
+    // Turning the phone upright mid-race pauses it behind the rotate prompt; turning it back resumes it
+    let portraitResumeTimer = null;
+    portraitQuery.addEventListener('change', () => {
+      clearTimeout(portraitResumeTimer);
+      if (onlineRole) return;
+      if (portraitQuery.matches) {
+        if (gameState === GAME_STATES.RACING) {
+          handlePauseShortcut();
+          pausedForPortrait = true;
+        }
+        return;
+      }
+      if (pausedForPortrait && gameState === GAME_STATES.PAUSED) {
+        // Let the browser finish the rotation (and the thumbs find the controls) before racing on
+        portraitResumeTimer = setTimeout(() => {
+          if (pausedForPortrait && gameState === GAME_STATES.PAUSED && !portraitQuery.matches) {
+            input.reset();
+            touch.reset();
+            resumeFromPause();
+          }
+        }, 900);
       }
     });
   }

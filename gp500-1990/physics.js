@@ -8,7 +8,7 @@ export const GRAVITY = 9.81;
 export const MAX_LEAN_RAD = (55 * Math.PI) / 180;
 
 // Top speeds (m/s) per gear at 13,000 RPM for a standard 85 m/s (~306 km/h) 500cc GP bike
-const BASE_GEAR_MAX_SPEEDS = [0, 33.0, 46.5, 58.5, 69.0, 78.0, 86.5];
+const BASE_GEAR_MAX_SPEEDS = [0, 37.0, 52.0, 63.5, 72.5, 80.0, 86.5];
 const GEAR_TORQUE_MULT = [0, 1.55, 1.32, 1.16, 1.04, 0.95, 0.88];
 
 function clamp(v, min, max) {
@@ -109,7 +109,7 @@ function computeGearAndRpm(rider, throttle, dt) {
   rider.rpm = getRpmForGear(rider.gear, rider.speed);
 
   if (rider.shiftTimer <= 0) {
-    if (rider.gear < 6 && rider.rpm >= 12350) {
+    if (rider.gear < 6 && rider.rpm >= 12800) {
       rider.gear += 1;
       rider.shiftTimer = 0.065;
       rider.rpm = getRpmForGear(rider.gear, rider.speed);

@@ -13,7 +13,7 @@ import { BIKES, getBikeById } from './bikes.js';
 import { TRACKS, createTrack } from './track.js';
 import { computePowerbandMultiplier, GRAVITY, MAX_LEAN_RAD } from './physics.js';
 
-const BASE_GEAR_MAX_SPEEDS = [0, 33.0, 46.5, 58.5, 69.0, 78.0, 86.5];
+const BASE_GEAR_MAX_SPEEDS = [0, 37.0, 52.0, 63.5, 72.5, 80.0, 86.5];
 
 const BIKE_SHOWROOM_META = {
   akagi: {
