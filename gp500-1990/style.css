@@ -3096,6 +3096,11 @@ html.site-scroll #race-canvas {
   color: var(--ink-muted);
 }
 
+.site-footer a {
+  color: inherit;
+  text-underline-offset: 2px;
+}
+
 /* ==========================================================================
    RESPONSIVE WEBSITE BREAKPOINTS & REDUCED MOTION
    ========================================================================== */

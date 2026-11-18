@@ -1212,12 +1212,24 @@ function enableShadowsRecursive(root) {
 }
 
 // ============================================================================
-// OPTIONAL REAL GLB MODEL LOADER (assets/bikes/<bikeId>.glb)
-// Asynchronous, scales to 1.40m wheelbase, swaps in for procedural bike body,
-// keeps procedural rider unless GLB contains one. Fails silently and skips in Node.
+// GLB WORKS BIKE (assets/bikes/gp500_works.glb, built by tools/prepare_bike_glb.py)
+// Authored in the rig frame: +X forward, axle midpoint at the origin, 1.40m wheelbase.
+// Nodes: body, wheel_front / wheel_rear (pivot on the axle), seat_anchor.
+// Swaps in for the procedural bike body; the procedural rider rides on top.
+// Skipped in Node; on any load failure the procedural bike stays.
 // ============================================================================
+const GLB_BIKE_URL = './assets/bikes/gp500_works.glb';
+const GLB_DRACO_DECODER_PATH = './vendor/addons/libs/draco/gltf/';
+const GLB_EMBEDDED_LIVERY_ID = 'akagi';
+// Procedural seat point the rider pose was tuned on (seat pad centre, top surface).
+const PROCEDURAL_SEAT = { x: -0.12, y: 0.755 };
+// Racers sit at the front of the seat, ahead of its lowest point.
+const GLB_SEAT_FORWARD = 0.06;
+const NO_SEAT_OFFSET = { x: 0, y: 0 };
+
 let glbManifestPromise = null;
-const glbTemplateCache = new Map();
+let glbTemplatePromise = null;
+const glbLiveryMaterials = new Map();
 
 function getEnabledGlbSet() {
   if (typeof window === 'undefined' || typeof document === 'undefined' || typeof fetch !== 'function') {
@@ -1227,13 +1239,13 @@ function getEnabledGlbSet() {
     if (Array.isArray(window.__GP500_GLB_BIKES)) {
       return Promise.resolve(new Set(window.__GP500_GLB_BIKES));
     }
-    return Promise.resolve(new Set(['akagi', 'shiden', 'kaze', 'corsa']));
+    return Promise.resolve(new Set(['all']));
   }
   try {
     const params = new URLSearchParams(window.location?.search || '');
-    if (params.get('glb') === '1' || params.get('glb') === 'true') {
-      return Promise.resolve(new Set(['akagi', 'shiden', 'kaze', 'corsa']));
-    }
+    const glbParam = params.get('glb');
+    if (glbParam === '1' || glbParam === 'true') return Promise.resolve(new Set(['all']));
+    if (glbParam === '0' || glbParam === 'false') return Promise.resolve(new Set());
   } catch {
     // ignore URL parse error
   }
@@ -1245,7 +1257,7 @@ function getEnabledGlbSet() {
         const match = text.match(/^[ \t]*ENABLE_GLB[ \t]*:[ \t]*([^\r\n#]+)/im);
         if (match && match[1]) {
           for (const token of match[1].split(/[,\s]+/)) {
-            const clean = token.trim().toLowerCase().replace(/\.glb$/i, '');
+            const clean = token.trim().toLowerCase();
             if (clean && clean !== 'none') set.add(clean);
           }
         }
@@ -1254,6 +1266,49 @@ function getEnabledGlbSet() {
       .catch(() => new Set());
   }
   return glbManifestPromise;
+}
+
+function loadGlbTemplate() {
+  if (!glbTemplatePromise) {
+    glbTemplatePromise = Promise.all([
+      import('three/addons/loaders/GLTFLoader.js'),
+      import('three/addons/loaders/DRACOLoader.js')
+    ])
+      .then(([{ GLTFLoader }, { DRACOLoader }]) => {
+        const draco = new DRACOLoader();
+        draco.setDecoderPath(GLB_DRACO_DECODER_PATH);
+        const loader = new GLTFLoader();
+        loader.setDRACOLoader(draco);
+        return loader.loadAsync(GLB_BIKE_URL);
+      })
+      .then((gltf) => (gltf?.scene?.getObjectByName('wheel_front') ? gltf.scene : null))
+      .catch(() => null);
+  }
+  return glbTemplatePromise;
+}
+
+// One painted material per team, shared by every rig of that bike.
+function getGlbLiveryMaterial(bikeId, baseMaterial) {
+  if (bikeId === GLB_EMBEDDED_LIVERY_ID) return Promise.resolve(baseMaterial);
+  if (!glbLiveryMaterials.has(bikeId)) {
+    const promise = new THREE.TextureLoader()
+      .loadAsync(`./assets/bikes/livery_${bikeId}.jpg`)
+      .then((tex) => {
+        tex.flipY = false;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        if (baseMaterial.map) {
+          tex.wrapS = baseMaterial.map.wrapS;
+          tex.wrapT = baseMaterial.map.wrapT;
+          tex.anisotropy = baseMaterial.map.anisotropy;
+        }
+        const mat = baseMaterial.clone();
+        mat.map = tex;
+        return mat;
+      })
+      .catch(() => baseMaterial);
+    glbLiveryMaterials.set(bikeId, promise);
+  }
+  return glbLiveryMaterials.get(bikeId);
 }
 
 export async function tryLoadOptionalBikeGLB(bikeId, rig, force = false) {
@@ -1268,75 +1323,41 @@ export async function tryLoadOptionalBikeGLB(bikeId, rig, force = false) {
       }
     }
 
-    let template = glbTemplateCache.get(bikeId);
-    if (template === undefined) {
-      const addonMod = await import('three/addons/loaders/GLTFLoader.js');
-      const GLTFLoader = addonMod?.GLTFLoader;
-      if (typeof GLTFLoader !== 'function') {
-        glbTemplateCache.set(bikeId, null);
-        return false;
-      }
-      const loader = new GLTFLoader();
-      const gltf = await new Promise((resolve, reject) => {
-        loader.load(
-          `./assets/bikes/${bikeId}.glb`,
-          (loaded) => resolve(loaded),
-          undefined,
-          (err) => reject(err)
-        );
-      });
-      template = gltf?.scene || null;
-      glbTemplateCache.set(bikeId, template);
-    }
-
+    const template = await loadGlbTemplate();
     if (!template) return false;
 
     const model = template.clone(true);
-    if (typeof THREE.Box3 === 'function') {
-      const box = new THREE.Box3().setFromObject(model);
-      const size = new THREE.Vector3();
-      const center = new THREE.Vector3();
-      box.getSize(size);
-      box.getCenter(center);
-
-      // Scale longest horizontal axis to match 1.40m wheelbase (~2.02m total length with tires)
-      const horizLength = Math.max(size.x, size.z, 0.001);
-      if (size.z > size.x * 1.15) {
-        model.rotation.y = Math.PI * 0.5;
-      }
-      const scaleFactor = 2.00 / horizLength;
-      model.scale.multiplyScalar(scaleFactor);
-
-      const scaledBox = new THREE.Box3().setFromObject(model);
-      const scaledCenter = new THREE.Vector3();
-      scaledBox.getCenter(scaledCenter);
-      model.position.set(-scaledCenter.x, -scaledBox.min.y, -scaledCenter.z);
-    }
-
-    let hasRiderInGlb = false;
+    const liveryMeshes = [];
     model.traverse((node) => {
-      if (node.isMesh) {
-        node.castShadow = true;
-        node.receiveShadow = true;
-      }
-      if (/rider|pilot|driver/i.test(node.name || '')) {
-        hasRiderInGlb = true;
-      }
+      if (!node.isMesh) return;
+      node.castShadow = true;
+      node.receiveShadow = true;
+      if (node.material?.name === 'livery_paint') liveryMeshes.push(node);
     });
+    if (liveryMeshes.length) {
+      const liveryMat = await getGlbLiveryMaterial(bikeId, liveryMeshes[0].material);
+      for (const mesh of liveryMeshes) mesh.material = liveryMat;
+    }
 
     if (rig.bikeBodyGroup) rig.bikeBodyGroup.visible = false;
     if (rig.frontWheelGroup) rig.frontWheelGroup.visible = false;
     if (rig.rearWheelGroup) rig.rearWheelGroup.visible = false;
     if (rig.frontForkGroup) rig.frontForkGroup.visible = false;
-    if (hasRiderInGlb && rig.riderBody) {
-      rig.riderBody.visible = false;
-    }
 
     rig.leanGroup.add(model);
     rig.glbModel = model;
+    rig.glbFrontWheel = model.getObjectByName('wheel_front');
+    rig.glbRearWheel = model.getObjectByName('wheel_rear');
+    const seat = model.getObjectByName('seat_anchor');
+    if (seat) {
+      rig.riderSeatOffset = {
+        x: seat.position.x + GLB_SEAT_FORWARD - PROCEDURAL_SEAT.x,
+        y: seat.position.y - PROCEDURAL_SEAT.y
+      };
+    }
     return true;
   } catch {
-    // Fail silently as required
+    // Fail silently: the procedural bike stays.
     return false;
   }
 }
@@ -1887,6 +1908,8 @@ export function updateDetailedBikeRig(rig, rider, dt = 1 / 60) {
   if (rig.rearWheelGroup) {
     rig.rearWheelGroup.rotation.z = rig.wheelAngle;
   }
+  if (rig.glbFrontWheel) rig.glbFrontWheel.rotation.z = rig.wheelAngle;
+  if (rig.glbRearWheel) rig.glbRearWheel.rotation.z = rig.wheelAngle;
 
   // Animate Rider Hang-Off, Knee-Down & Aero Tuck
   const leanNorm = clamp(lean / 0.96, -1, 1);
@@ -1896,8 +1919,9 @@ export function updateDetailedBikeRig(rig, rider, dt = 1 / 60) {
   if (rig.riderBody) {
     // Shift hips laterally off the seat into the inside of the turn
     rig.riderBody.position.z = leanNorm * 0.21;
-    rig.riderBody.position.y = (isTuck ? 0.705 : 0.740) - absLean * 0.038;
-    rig.riderBody.position.x = isTuck ? -0.14 : -0.11;
+    const seatOffset = rig.riderSeatOffset || NO_SEAT_OFFSET;
+    rig.riderBody.position.y = (isTuck ? 0.705 : 0.740) - absLean * 0.038 + seatOffset.y;
+    rig.riderBody.position.x = (isTuck ? -0.14 : -0.11) + seatOffset.x;
   }
 
   if (rig.torsoGroup) {
