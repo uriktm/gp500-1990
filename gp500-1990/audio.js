@@ -816,7 +816,8 @@ export function createAudioEngine() {
       ctx.resume().catch(() => {});
     }
 
-    const humanRiders = riders.filter((r) => r && !r.isAI);
+    // Keep P1 on voice 0 / left and P2 on voice 1 / right no matter who is leading the race
+    const humanRiders = riders.filter((r) => r && !r.isAI).sort((a, b) => String(a.id).localeCompare(String(b.id)));
     const r0 = humanRiders[0] || riders[0] || null;
     const r1 = humanRiders[1] || null;
 

@@ -2018,7 +2018,8 @@ export function createRaceRenderer(canvas, opts = {}) {
       return;
     }
 
-    const humanRiders = riders.filter((r) => r && !r.isAI);
+    // The rider list is re-sorted by race position every frame; screens follow the fixed player ids instead
+    const humanRiders = riders.filter((r) => r && !r.isAI).sort((a, b) => String(a.id).localeCompare(String(b.id)));
     const hasExplicitFocus = options && typeof options.focusIndex === 'number' && riders[options.focusIndex];
     const p1Rider = hasExplicitFocus ? riders[options.focusIndex] : (humanRiders[0] || riders[0] || null);
     const p2Rider = humanRiders[1] || riders[1] || null;
