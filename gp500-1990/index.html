@@ -37,6 +37,7 @@
 
     <div class="site-nav-actions">
       <button id="btn-site-mute" type="button" class="nav-util-btn" aria-pressed="false" title="Toggle Audio [M]">AUDIO: ON [M]</button>
+      <button id="btn-nav-online" type="button" class="nav-online-btn">PLAY ONLINE</button>
       <button id="btn-nav-paddock" type="button" class="nav-secondary-btn">ENTER PADDOCK</button>
       <button id="btn-nav-quickplay" type="button" class="nav-primary-btn">QUICK 2P RACE</button>
     </div>
@@ -67,6 +68,7 @@
 
           <div class="hero-cta-row">
             <button id="btn-hero-quickplay" type="button" class="cta-primary">QUICK 2P RACE</button>
+            <button id="btn-hero-online" type="button" class="cta-online">PLAY ONLINE 1v1</button>
             <button id="btn-hero-paddock" type="button" class="cta-secondary">ENTER RACE PADDOCK</button>
             <a id="btn-hero-garage" href="#showroom-section" class="cta-ghost">EXPLORE 3D GARAGE</a>
           </div>
@@ -417,6 +419,7 @@
         <div class="masthead-telemetry">
           <div id="menu-pad1-status" class="hw-pill">P1: WASD + SPACE + C</div>
           <div id="menu-pad2-status" class="hw-pill">P2: ARROWS + ENTER + .</div>
+          <button id="btn-paddock-online" type="button" class="util-btn util-btn-online" title="Open Online 1v1 Duel Lobby">PLAY ONLINE</button>
           <button id="btn-paddock-home" type="button" class="util-btn util-btn-home" title="Return to Website Showcase">← BACK TO WEBSITE</button>
           <button id="btn-menu-mute" type="button" class="util-btn" title="Shortcut: M">AUDIO: ON [M]</button>
         </div>
@@ -432,12 +435,14 @@
             <option value="championship">2P Championship (3 Rounds)</option>
             <option value="duel">2P 1v1 Head-to-Head Duel</option>
             <option value="solo">1P Solo GP Race</option>
+            <option value="online-duel">Online 1v1 Duel (WebRTC)</option>
           </select>
           <div class="Segmented-pills" data-for="select-mode">
             <button type="button" class="seg-btn active" data-value="gp">2P GP (8 Riders)</button>
             <button type="button" class="seg-btn" data-value="championship">2P CHAMPIONSHIP</button>
             <button type="button" class="seg-btn" data-value="duel">2P 1v1 Duel</button>
             <button type="button" class="seg-btn" data-value="solo">1P Solo GP</button>
+            <button type="button" class="seg-btn seg-btn-online" data-value="online-duel">ONLINE 1v1 DUEL</button>
           </div>
         </div>
 
@@ -911,6 +916,10 @@
       </div>
     </div>
 
+    <!-- Online Multiplayer Status Badge & Away Banner -->
+    <div id="online-net-badge" class="online-net-badge hidden" aria-live="polite">ONLINE · P2P · --ms</div>
+    <div id="online-away-banner" class="online-away-banner hidden" role="status" aria-live="assertive">OPPONENT AWAY</div>
+
     <!-- Start Gantry Countdown Lights Overlay -->
     <div id="countdown-overlay" class="gantry-overlay hidden">
       <div class="gantry-housing">
@@ -1074,6 +1083,133 @@
         </div>
       </div>
     </footer>
+  </section>
+
+  <!-- =====================================================================
+       ONLINE 1v1 DUEL LOBBY MODAL (WEBRTC P2P / TURN RELAY)
+       ===================================================================== -->
+  <section id="online-lobby-overlay" class="modal-overlay online-lobby-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="online-lobby-title">
+    <div class="modal-card online-lobby-card">
+      <header class="online-lobby-header">
+        <div class="online-lobby-title-wrap">
+          <span class="modal-eyebrow">1990 FIM ONLINE PADDOCK · OWNER-AUTHORITATIVE 1v1 WEBRTC</span>
+          <h2 id="online-lobby-title" class="modal-title">ONLINE 1v1 DUEL LOBBY</h2>
+        </div>
+
+        <div class="online-header-right">
+          <div id="online-status-pill" class="online-status-pill" data-phase="idle">
+            <span class="online-status-dot" aria-hidden="true"></span>
+            <span id="online-status-text">READY TO CONNECT</span>
+            <span class="online-ping-sep">·</span>
+            <span class="online-ping-label">PING <strong id="online-ping-val">--</strong></span>
+          </div>
+          <button id="btn-online-close" type="button" class="btn-secondary online-close-btn">CLOSE / BACK</button>
+        </div>
+      </header>
+
+      <div id="online-error-banner" class="online-error-banner hidden" role="alert">
+        <span id="online-error-text" class="online-error-text">Connection failed. Check network or retry.</span>
+        <button id="btn-online-retry" type="button" class="btn-secondary online-retry-btn">RETRY</button>
+      </div>
+
+      <div class="online-role-tabs" role="tablist" aria-label="Online Duel Role">
+        <button id="btn-online-tab-create" type="button" class="online-tab-btn active" role="tab" aria-selected="true" data-tab="create">CREATE ROOM (HOST)</button>
+        <button id="btn-online-tab-join" type="button" class="online-tab-btn" role="tab" aria-selected="false" data-tab="join">JOIN ROOM (GUEST)</button>
+      </div>
+
+      <!-- HOST PANEL: CREATE ROOM -->
+      <div id="online-panel-host" class="online-panel" role="tabpanel" aria-labelledby="btn-online-tab-create">
+        <div class="online-panel-grid">
+          <div class="online-config-col">
+            <div class="online-field">
+              <label class="config-label" for="online-host-track">CIRCUIT</label>
+              <select id="online-host-track" class="gp-select">
+                <option value="sakura" selected>Sakura GP Circuit</option>
+                <option value="monterey">Monterey Ridge (Corkscrew)</option>
+                <option value="cathedral">Cathedral TT</option>
+              </select>
+            </div>
+
+            <div class="online-field">
+              <label class="config-label" for="online-host-laps">RACE DISTANCE</label>
+              <select id="online-host-laps" class="gp-select">
+                <option value="3" selected>3 Laps</option>
+                <option value="5">5 Laps</option>
+                <option value="8">8 Laps</option>
+              </select>
+            </div>
+
+            <div class="online-field">
+              <label class="config-label" for="online-host-bike">HOST MACHINE (P1)</label>
+              <select id="online-host-bike" class="gp-select">
+                <option value="akagi" selected>#1 Akagi V4-500 (Apex Red)</option>
+                <option value="shiden">#4 Shiden NSR-V (Factory Blue Gold)</option>
+                <option value="kaze">#34 Kaze RGV-500 (Striker Cyan Red)</option>
+                <option value="corsa">#27 Corsa 500 Italia (Scuderia Corsa)</option>
+              </select>
+            </div>
+
+            <button id="btn-online-create" type="button" class="btn-primary online-action-btn">CREATE ROOM</button>
+          </div>
+
+          <div class="online-room-col">
+            <div class="online-code-box">
+              <span class="online-code-label">ROOM INVITE CODE</span>
+              <div id="online-room-code" class="online-room-code" aria-live="polite">-----</div>
+              <div class="online-invite-actions">
+                <button id="btn-online-copy-link" type="button" class="btn-secondary" disabled>COPY INVITE LINK</button>
+                <span id="online-copy-feedback" class="online-copy-feedback hidden">COPIED!</span>
+              </div>
+            </div>
+
+            <div id="online-host-peer-status" class="online-peer-box">
+              CREATE A ROOM TO GENERATE A 5-CHARACTER INVITE CODE FOR YOUR OPPONENT.
+            </div>
+
+            <button id="btn-online-start" type="button" class="btn-launch-gp online-start-btn" disabled>START ONLINE DUEL</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- GUEST PANEL: JOIN ROOM -->
+      <div id="online-panel-guest" class="online-panel hidden" role="tabpanel" aria-labelledby="btn-online-tab-join">
+        <div class="online-panel-grid">
+          <div class="online-config-col">
+            <div class="online-field">
+              <label class="config-label" for="online-join-code">ENTER 5-CHAR ROOM CODE</label>
+              <div class="online-join-row">
+                <input id="online-join-code" type="text" class="online-code-input" maxlength="8" autocomplete="off" spellcheck="false" placeholder="K8M4P" />
+                <button id="btn-online-join" type="button" class="btn-primary online-join-btn">JOIN ROOM</button>
+              </div>
+            </div>
+
+            <div class="online-field">
+              <label class="config-label" for="online-guest-bike">GUEST MACHINE (P2)</label>
+              <select id="online-guest-bike" class="gp-select">
+                <option value="akagi">#1 Akagi V4-500 (Apex Red)</option>
+                <option value="shiden" selected>#4 Shiden NSR-V (Factory Blue Gold)</option>
+                <option value="kaze">#34 Kaze RGV-500 (Striker Cyan Red)</option>
+                <option value="corsa">#27 Corsa 500 Italia (Scuderia Corsa)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="online-room-col">
+            <div id="online-guest-match-info" class="online-peer-box">
+              ENTER THE HOST'S 5-CHARACTER CODE OR OPEN AN INVITE LINK (?room=XXXXX) TO CONNECT.
+            </div>
+
+            <button id="btn-online-ready" type="button" class="btn-secondary online-ready-btn" disabled>READY</button>
+            <div id="online-guest-wait-hint" class="online-wait-hint">CONNECT TO ROOM BEFORE MARKING READY.</div>
+          </div>
+        </div>
+      </div>
+
+      <footer class="online-lobby-footer">
+        <span>CONTROLS: W/S THROTTLE·BRAKE · A/D LEAN · SPACE TUCK · C CAM (SINGLE FULLSCREEN VIEWPORT)</span>
+        <span id="online-relay-hint" class="online-relay-hint">WEBRTC P2P + TURN RELAY FALLBACK</span>
+      </footer>
+    </div>
   </section>
 
   <script type="module" src="./game.js"></script>

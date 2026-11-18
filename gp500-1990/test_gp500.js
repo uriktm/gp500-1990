@@ -1497,6 +1497,523 @@ async function main() {
   });
 
   // ---------------------------------------------------------------------------
+  // 11. ONLINE 1v1 DUEL: SIGNALING API, NETCODE CORE, VERCEL CONFIG & LOBBY UI
+  // ---------------------------------------------------------------------------
+  console.log('\n11. Online 1v1 Duel: Signaling API (/api/room), Netcode Core (netcode.js), Config & UI');
+
+  function httpJsonRequest(port, method, reqPath, bodyObj = null) {
+    return new Promise((resolve, reject) => {
+      const payload = bodyObj !== null ? JSON.stringify(bodyObj) : null;
+      const headers = payload !== null
+        ? {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+          }
+        : {};
+      const req = http.request(
+        { hostname: '127.0.0.1', port, path: reqPath, method, headers, timeout: 4000 },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            const text = Buffer.concat(chunks).toString('utf8');
+            let json = null;
+            try {
+              json = JSON.parse(text);
+            } catch {
+              json = null;
+            }
+            resolve({ statusCode: res.statusCode, headers: res.headers, body: text, json });
+          });
+        }
+      );
+      req.on('error', reject);
+      req.on('timeout', () => req.destroy(new Error(`Timeout ${method} ${reqPath}`)));
+      if (payload !== null) req.write(payload);
+      req.end();
+    });
+  }
+
+  function invokeMockRoomReq(handler, { method = 'GET', url = '/api/room', query = {}, body = undefined, ip = '203.0.113.10' }) {
+    return new Promise((resolve, reject) => {
+      const resHeaders = {};
+      let resolved = false;
+      const req = {
+        method,
+        url,
+        query,
+        body,
+        headers: { 'x-forwarded-for': ip },
+        socket: { remoteAddress: ip },
+      };
+      const res = {
+        statusCode: 200,
+        setHeader(k, v) {
+          resHeaders[String(k).toLowerCase()] = String(v);
+        },
+        writeHead(status, hdrs = {}) {
+          this.statusCode = status;
+          for (const [k, v] of Object.entries(hdrs)) {
+            resHeaders[String(k).toLowerCase()] = String(v);
+          }
+        },
+        end(raw = '') {
+          if (resolved) return;
+          resolved = true;
+          const text = String(raw || '');
+          let json = null;
+          try {
+            json = text ? JSON.parse(text) : null;
+          } catch {
+            json = null;
+          }
+          resolve({ statusCode: this.statusCode, headers: resHeaders, body: text, json });
+        },
+      };
+      Promise.resolve(handler(req, res)).catch(reject);
+    });
+  }
+
+  await runTest('/api/room createRoomHandler handles ICE discovery, create -> get -> answer, 404, 409, 600s TTL, and IP rate limit (429)', async () => {
+    const { createRoomHandler } = await import('./api/room.js');
+    const store = new Map();
+    let fakeNowMs = 1_700_000_000_000;
+    const handler = createRoomHandler({
+      store,
+      nowFn: () => fakeNowMs,
+      env: {},
+    });
+
+    // 1. GET ?action=ice returns STUN servers and Cache-Control: no-store
+    const iceRes = await invokeMockRoomReq(handler, {
+      method: 'GET',
+      url: '/api/room?action=ice',
+      query: { action: 'ice' },
+    });
+    assert.equal(iceRes.statusCode, 200);
+    assert.equal(iceRes.headers['cache-control'], 'no-store');
+    assert.ok(Array.isArray(iceRes.json?.iceServers) && iceRes.json.iceServers.length >= 2, 'Expected STUN iceServers');
+    assert.ok(
+      iceRes.json.iceServers.some((s) => String(s.urls).includes('stun:')),
+      'Expected at least one STUN server in iceServers'
+    );
+
+    // 2. POST ?action=create -> GET ?code=... -> POST ?action=answer -> GET ?code=...
+    const hostOffer = { type: 'offer', sdp: 'v=0\r\no=- 123 2 IN IP4 127.0.0.1\r\n' };
+    const guestAnswer = { type: 'answer', sdp: 'v=0\r\no=- 456 2 IN IP4 127.0.0.1\r\n' };
+    const createRes = await invokeMockRoomReq(handler, {
+      method: 'POST',
+      url: '/api/room?action=create',
+      query: { action: 'create' },
+      body: { offer: hostOffer, hostMeta: { trackId: 'sakura', laps: 3, hostBikeId: 'akagi' } },
+      ip: '198.51.100.1',
+    });
+    assert.equal(createRes.statusCode, 200);
+    assert.equal(createRes.json?.expiresIn, 600);
+    const roomCode = createRes.json?.code;
+    assert.ok(/^[A-Z2-9]{5}$/.test(roomCode), `Expected 5-char room code, got ${roomCode}`);
+
+    const getBeforeAns = await invokeMockRoomReq(handler, {
+      method: 'GET',
+      url: `/api/room?code=${roomCode}`,
+      query: { code: roomCode },
+    });
+    assert.equal(getBeforeAns.statusCode, 200);
+    assert.equal(getBeforeAns.json.code, roomCode);
+    assert.deepEqual(getBeforeAns.json.offer, hostOffer);
+    assert.equal(getBeforeAns.json.answer, null);
+    assert.equal(getBeforeAns.json.hostMeta?.trackId, 'sakura');
+    assert.ok(Array.isArray(getBeforeAns.json.iceServers));
+
+    const ansRes = await invokeMockRoomReq(handler, {
+      method: 'POST',
+      url: '/api/room?action=answer',
+      query: { action: 'answer' },
+      body: { code: roomCode, answer: guestAnswer, guestMeta: { guestBikeId: 'shiden' } },
+    });
+    assert.equal(ansRes.statusCode, 200);
+    assert.equal(ansRes.json?.ok, true);
+    assert.equal(ansRes.json?.code, roomCode);
+
+    const getAfterAns = await invokeMockRoomReq(handler, {
+      method: 'GET',
+      url: `/api/room?code=${roomCode}`,
+      query: { code: roomCode },
+    });
+    assert.equal(getAfterAns.statusCode, 200);
+    assert.deepEqual(getAfterAns.json.answer, guestAnswer);
+    assert.equal(getAfterAns.json.guestMeta?.guestBikeId, 'shiden');
+
+    // 3. 409 on duplicate answer (room full)
+    const dupAns = await invokeMockRoomReq(handler, {
+      method: 'POST',
+      url: '/api/room?action=answer',
+      query: { action: 'answer' },
+      body: { code: roomCode, answer: { type: 'answer', sdp: 'v=0\r\n' } },
+    });
+    assert.equal(dupAns.statusCode, 409, `Expected 409 on duplicate answer, got ${dupAns.statusCode}`);
+
+    // 4. 404 on unknown room code
+    const missingGet = await invokeMockRoomReq(handler, {
+      method: 'GET',
+      url: '/api/room?code=NOPE9',
+      query: { code: 'NOPE9' },
+    });
+    assert.equal(missingGet.statusCode, 404);
+    const missingAns = await invokeMockRoomReq(handler, {
+      method: 'POST',
+      url: '/api/room?action=answer',
+      query: { action: 'answer' },
+      body: { code: 'NOPE9', answer: guestAnswer },
+    });
+    assert.equal(missingAns.statusCode, 404);
+
+    // 5. 600s TTL expiration using simulated clock
+    fakeNowMs += 599_000;
+    const stillValid = await invokeMockRoomReq(handler, {
+      method: 'GET',
+      url: `/api/room?code=${roomCode}`,
+      query: { code: roomCode },
+    });
+    assert.equal(stillValid.statusCode, 200, 'Room should still be valid at 599s');
+
+    fakeNowMs += 1_000; // 600s elapsed
+    const expiredGet = await invokeMockRoomReq(handler, {
+      method: 'GET',
+      url: `/api/room?code=${roomCode}`,
+      query: { code: roomCode },
+    });
+    assert.equal(expiredGet.statusCode, 404, 'Room must expire and return 404 at 600s');
+
+    // 6. IP rate limit: 20 creates/hour allowed, 21st returns 429
+    const rateIp = '198.51.100.77';
+    for (let i = 0; i < 20; i++) {
+      const r = await invokeMockRoomReq(handler, {
+        method: 'POST',
+        url: '/api/room?action=create',
+        query: { action: 'create' },
+        body: { offer: hostOffer },
+        ip: rateIp,
+      });
+      assert.equal(r.statusCode, 200, `Create #${i + 1} for ${rateIp} should return 200, got ${r.statusCode}`);
+    }
+    const overLimit = await invokeMockRoomReq(handler, {
+      method: 'POST',
+      url: '/api/room?action=create',
+      query: { action: 'create' },
+      body: { offer: hostOffer },
+      ip: rateIp,
+    });
+    assert.equal(overLimit.statusCode, 429, `21st create in 1h must return 429, got ${overLimit.statusCode}`);
+
+    // Different IP is unaffected
+    const otherIp = await invokeMockRoomReq(handler, {
+      method: 'POST',
+      url: '/api/room?action=create',
+      query: { action: 'create' },
+      body: { offer: hostOffer },
+      ip: '198.51.100.88',
+    });
+    assert.equal(otherIp.statusCode, 200);
+
+    // Rate limit resets after 3600s
+    fakeNowMs += 3_600_000;
+    const afterWindow = await invokeMockRoomReq(handler, {
+      method: 'POST',
+      url: '/api/room?action=create',
+      query: { action: 'create' },
+      body: { offer: hostOffer },
+      ip: rateIp,
+    });
+    assert.equal(afterWindow.statusCode, 200);
+
+    // 7. TURN_KEY_ID + TURN_API_TOKEN fetches temporary TURN iceServers
+    const turnHandler = createRoomHandler({
+      store: new Map(),
+      nowFn: () => fakeNowMs,
+      env: { TURN_KEY_ID: 'cf-key-1', TURN_API_TOKEN: 'cf-secret-tok' },
+      fetchFn: async (url, init) => {
+        assert.match(String(url), /rtc\.live\.cloudflare\.com\/v1\/turn\/keys\/cf-key-1\/credentials\/generate-ice-servers/);
+        assert.equal(init.method, 'POST');
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              iceServers: [
+                { urls: ['turn:turn.cloudflare.com:3478?transport=udp'], username: 'u1', credential: 'c1' },
+              ],
+            };
+          },
+        };
+      },
+    });
+    const turnIceRes = await invokeMockRoomReq(turnHandler, {
+      method: 'GET',
+      url: '/api/room?action=ice',
+      query: { action: 'ice' },
+    });
+    assert.equal(turnIceRes.statusCode, 200);
+    assert.ok(
+      turnIceRes.json.iceServers.some((s) => JSON.stringify(s.urls).includes('turn:turn.cloudflare.com')),
+      'Expected TURN server entry when TURN_KEY_ID & TURN_API_TOKEN are set'
+    );
+  });
+
+  await runTest('server.js mounts /api/room over live HTTP and serves netcode.js + .glb MIME types', async () => {
+    const serverMod = await import('./server.js');
+    const srv = serverMod.createServer();
+    await new Promise((resolve, reject) => {
+      srv.once('error', reject);
+      srv.listen(0, '127.0.0.1', resolve);
+    });
+    const port = srv.address().port;
+
+    try {
+      const netRes = await fetchUrl(port, '/netcode.js');
+      assert.equal(netRes.statusCode, 200);
+      assert.match(netRes.headers['content-type'] || '', /javascript/i);
+
+      const iceHttp = await httpJsonRequest(port, 'GET', '/api/room?action=ice');
+      assert.equal(iceHttp.statusCode, 200);
+      assert.equal(iceHttp.headers['cache-control'], 'no-store');
+      assert.ok(Array.isArray(iceHttp.json?.iceServers) && iceHttp.json.iceServers.length >= 2);
+
+      const created = await httpJsonRequest(port, 'POST', '/api/room?action=create', {
+        offer: { type: 'offer', sdp: 'v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n' },
+        hostMeta: { trackId: 'monterey', laps: 5 },
+      });
+      assert.equal(created.statusCode, 200);
+      const code = created.json?.code;
+      assert.ok(code && code.length === 5);
+
+      const fetched = await httpJsonRequest(port, 'GET', `/api/room?code=${code}`);
+      assert.equal(fetched.statusCode, 200);
+      assert.equal(fetched.json.hostMeta?.trackId, 'monterey');
+
+      const answered = await httpJsonRequest(port, 'POST', '/api/room?action=answer', {
+        code,
+        answer: { type: 'answer', sdp: 'v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\n' },
+        guestMeta: { guestBikeId: 'kaze' },
+      });
+      assert.equal(answered.statusCode, 200);
+      assert.equal(answered.json?.ok, true);
+
+      const fullRoom = await httpJsonRequest(port, 'POST', '/api/room?action=answer', {
+        code,
+        answer: { type: 'answer', sdp: 'v=0\r\n' },
+      });
+      assert.equal(fullRoom.statusCode, 409);
+
+      const missingRoom = await httpJsonRequest(port, 'GET', '/api/room?code=NOPE9');
+      assert.equal(missingRoom.statusCode, 404);
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  });
+
+  await runTest('netcode.js encodeRiderState / decodeRiderState round-trip and validation', async () => {
+    const netcodeMod = await import('./netcode.js');
+    const { encodeRiderState, decodeRiderState } = netcodeMod;
+
+    const rider = createRiderState({ id: 'p1', bike: BIKES[2], s: 1234.56, d: -2.75, track: sakura });
+    rider.psi = 0.28;
+    rider.speed = 68.4;
+    rider.rpm = 11420;
+    rider.gear = 5;
+    rider.lean = -0.74;
+    rider.wheelieAngle = 0.035;
+    rider.rearSlip = 0.42;
+    rider.brake = 0.15;
+    rider.throttle = 0.92;
+    rider.tuck = true;
+    rider.onKerb = true;
+    rider.offTrack = false;
+    rider.lap = 2;
+    rider.lapTime = 34.125;
+    rider.bestLapTime = 51.89;
+    rider.totalTime = 86.015;
+    rider.finished = false;
+
+    const packet = encodeRiderState(rider, 77, 4567.8);
+    assert.equal(packet.seq, 77);
+    assert.equal(packet.t, 4567.8);
+    assert.equal(packet.s, 1234.56);
+    assert.equal(packet.gear, 5);
+    assert.equal(packet.tuck, true);
+    assert.equal(packet.onKerb, true);
+    assert.equal(packet.offTrack, false);
+    assert.equal(packet.bestLapTime, 51.89);
+
+    const jsonStr = JSON.stringify(packet);
+    const decoded = decodeRiderState(jsonStr);
+    assert.deepEqual(decoded, packet, 'JSON encode -> decode round-trip must match packet identically');
+
+    const decodedObj = decodeRiderState(packet);
+    assert.deepEqual(decodedObj, packet);
+
+    assert.equal(decodeRiderState('not-valid-json{'), null);
+    assert.equal(decodeRiderState(''), null);
+    assert.equal(decodeRiderState(null), null);
+    assert.equal(decodeRiderState([1, 2, 3]), null);
+  });
+
+  await runTest('netcode.js interpolateRider handles track wraparound (L-1 -> 2) and bounded extrapolation (<= 150ms)', async () => {
+    const netcodeMod = await import('./netcode.js');
+    const { interpolateRider } = netcodeMod;
+
+    const L = 2400;
+    const snapA = {
+      seq: 10, t: 1000, s: L - 1, d: -1.0, psi: 0.02, speed: 60, rpm: 11000, gear: 5,
+      lean: -0.2, wheelieAngle: 0, rearSlip: 0.1, brake: 0, throttle: 1, tuck: true,
+      onKerb: false, offTrack: false, lap: 1, lapTime: 52.0, bestLapTime: null, totalTime: 52.0, finished: false,
+    };
+    const snapB = {
+      seq: 11, t: 1030, s: 2, d: 0.5, psi: -0.02, speed: 63, rpm: 11400, gear: 5,
+      lean: 0.2, wheelieAngle: 0, rearSlip: 0.1, brake: 0, throttle: 1, tuck: true,
+      onKerb: false, offTrack: false, lap: 2, lapTime: 0.03, bestLapTime: 52.01, totalTime: 52.04, finished: false,
+    };
+
+    // Midpoint across s = L-1 -> 2: shortest circular delta is +3m, midpoint is s = 0.5m (NOT L/2!)
+    const mid = interpolateRider([snapA, snapB], 1015, L, 150);
+    assert.ok(Math.abs(mid.s - 0.5) < 1e-6, `Expected wrapped midpoint s=0.5, got ${mid.s}`);
+    assert.ok(Math.abs(mid.d - (-0.25)) < 1e-6, `Expected interpolated d=-0.25, got ${mid.d}`);
+    assert.equal(mid.lap, 2, 'Past s=L line at midpoint should reflect new lap');
+
+    // Early point before s=0 line (1/6 of 30ms -> s = L - 0.5)
+    const beforeLine = interpolateRider([snapA, snapB], 1005, L, 150);
+    assert.ok(Math.abs(beforeLine.s - (L - 0.5)) < 1e-6, `Expected s=${L - 0.5}, got ${beforeLine.s}`);
+    assert.equal(beforeLine.lap, 1);
+
+    // Bounded extrapolation: 100ms ahead -> +6.0m; 600ms ahead -> capped at 150ms (+9.0m, NOT +36.0m)
+    const latest = { ...snapB, t: 2000, s: 100, d: 1.0, psi: 0, speed: 60 };
+    const extrap100 = interpolateRider([latest], 2100, L, 150);
+    assert.ok(Math.abs(extrap100.s - 106.0) < 1e-6, `Expected s=106.0 at +100ms, got ${extrap100.s}`);
+
+    const extrap600 = interpolateRider([latest], 2600, L, 150);
+    assert.ok(Math.abs(extrap600.s - 109.0) < 1e-6, `Expected s=109.0 capped at 150ms, got ${extrap600.s}`);
+    assert.equal(extrap600.t, 2150);
+  });
+
+  await runTest('netcode.js estimateClockOffset applies median filtering over up to 5 samples', async () => {
+    const netcodeMod = await import('./netcode.js');
+    const { estimateClockOffset } = netcodeMod;
+
+    // 7 samples total -> keeps last 5: rtts [34, 30, 950, 32, 36] -> median 34; offsets [122, 118, 5000, 120, 121] -> median 121
+    const samples = [
+      { rtt: 10, offset: 999 },
+      { rtt: 12, offset: 999 },
+      { rtt: 34, offset: 122 },
+      { rtt: 30, offset: 118 },
+      { rtt: 950, offset: 5000 },
+      { rtt: 32, offset: 120 },
+      { rtt: 36, offset: 121 },
+    ];
+    const est = estimateClockOffset(samples);
+    assert.equal(est.rttMs, 34, `Expected median RTT 34ms resisting 950ms spike, got ${est.rttMs}`);
+    assert.equal(est.offsetMs, 121, `Expected median offset 121ms resisting 5000ms spike, got ${est.offsetMs}`);
+    assert.deepEqual(estimateClockOffset([]), { rttMs: 0, offsetMs: 0 });
+  });
+
+  await runTest('vercel.json, README.md, and index.html contain Online 1v1 Duel config, docs, and UI IDs', async () => {
+    const vercelCfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'vercel.json'), 'utf8'));
+    assert.ok(Array.isArray(vercelCfg.headers) && vercelCfg.headers.length >= 2, 'vercel.json missing headers array');
+    const hasApiNoStore = vercelCfg.headers.some(
+      (rule) => /\/api\//.test(rule.source) && rule.headers?.some((h) => h.key === 'Cache-Control' && h.value === 'no-store')
+    );
+    const hasGlbMime = vercelCfg.headers.some(
+      (rule) => /glb/.test(rule.source) && rule.headers?.some((h) => h.key === 'Content-Type' && h.value === 'model/gltf-binary')
+    );
+    assert.ok(hasApiNoStore, 'vercel.json must configure Cache-Control: no-store for /api/*');
+    assert.ok(hasGlbMime, 'vercel.json must configure Content-Type: model/gltf-binary for *.glb');
+
+    const readme = fs.readFileSync(path.join(__dirname, 'README.md'), 'utf8');
+    assert.ok(/Vercel/i.test(readme), 'README.md must document Vercel deployment');
+    assert.ok(/KV_REST_API|Upstash/i.test(readme), 'README.md must document Upstash Redis env vars');
+    assert.ok(/TURN_KEY_ID|TURN_API_TOKEN/i.test(readme), 'README.md must document TURN env vars');
+    assert.ok(/\?relay=1/.test(readme), 'README.md must document ?relay=1 verification');
+
+    const htmlSource = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+    assert.ok(htmlSource.includes('ONLINE 1v1 DUEL'), 'index.html missing ONLINE 1v1 DUEL mode option/pill');
+    assert.ok(/value=["']online-duel["']/.test(htmlSource), 'index.html missing online-duel value');
+    for (const id of [
+      'online-lobby-overlay',
+      'online-net-badge',
+      'online-away-banner',
+      'btn-nav-online',
+      'btn-online-create',
+      'btn-online-join',
+      'btn-online-ready',
+      'btn-online-start',
+      'online-room-code',
+      'online-status-pill',
+    ]) {
+      assert.ok(new RegExp(`id=["']${id}["']`).test(htmlSource), `index.html missing #${id}`);
+    }
+
+    const gameMod = await import('./game.js');
+    const parsedOnline = gameMod.parseUrlConfig('?room=ab12c&relay=1');
+    assert.equal(parsedOnline.room, 'AB12C');
+    assert.equal(parsedOnline.relay, true);
+
+    const zipBuf = fs.readFileSync(path.join(__dirname, 'dist', 'gp500-1990-web.zip'));
+    assert.ok(zipBuf.includes(Buffer.from('netcode.js', 'utf8')), 'Web ZIP archive must include netcode.js');
+    assert.equal(zipBuf.includes(Buffer.from('api/room.js', 'utf8')), false, 'Web ZIP archive should exclude serverless api/room.js');
+  });
+
+  await runTest('netcode.js createOnlineSession configures iceTransportPolicy=relay when relayOnly=true', async () => {
+    const netcodeMod = await import('./netcode.js');
+    const seenConfigs = [];
+    class MockPeerConnection {
+      constructor(rtcConfig) {
+        seenConfigs.push(rtcConfig);
+        this.iceGatheringState = 'complete';
+        this.signalingState = 'stable';
+        this.localDescription = { type: 'offer', sdp: 'v=0\r\n' };
+      }
+      createDataChannel() {
+        return { readyState: 'connecting', send() {}, close() {} };
+      }
+      async createOffer() { return { type: 'offer', sdp: 'v=0\r\n' }; }
+      async setLocalDescription(d) { this.localDescription = d; }
+      async getStats() { return new Map(); }
+      close() {}
+    }
+
+    const sess = netcodeMod.createOnlineSession({
+      role: 'host',
+      relayOnly: true,
+      RTCPeerConnectionClass: MockPeerConnection,
+      fetchFn: async (url) => {
+        if (String(url).includes('action=ice')) {
+          return {
+            ok: true,
+            status: 200,
+            async json() {
+              return { iceServers: [{ urls: 'turn:turn.example.com:3478', username: 'u', credential: 'p' }] };
+            },
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return { code: 'K8M4P', expiresIn: 600 };
+          },
+        };
+      },
+      pollIntervalMs: 5000,
+    });
+
+    const started = await sess.start();
+    assert.equal(started.ok, true);
+    assert.equal(started.code, 'K8M4P');
+    assert.equal(seenConfigs.length, 1);
+    assert.equal(seenConfigs[0].iceTransportPolicy, 'relay');
+    sess.close();
+  });
+
+  // ---------------------------------------------------------------------------
   // SUMMARY
   // ---------------------------------------------------------------------------
   console.log('\n==========================================================');

@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRoomHandler } from './api/room.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,6 +15,7 @@ export const MIME_TYPES = {
   '.js': 'application/javascript; charset=utf-8',
   '.mjs': 'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.glb': 'model/gltf-binary',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -25,24 +27,39 @@ export const MIME_TYPES = {
 };
 
 /**
- * Creates a zero-dependency Node HTTP server serving the GP500 '90 directory.
+ * Creates a zero-dependency Node HTTP server serving the GP500 '90 directory
+ * and the /api/room WebRTC signaling endpoint.
  * @param {string} [rootDir=ROOT_DIR]
+ * @param {object} [options]
  * @returns {import('node:http').Server}
  */
-export function createServer(rootDir = ROOT_DIR) {
+export function createServer(rootDir = ROOT_DIR, options = {}) {
   const resolvedRoot = path.resolve(rootDir);
+  const roomHandler = options.roomHandler || createRoomHandler();
 
-  return http.createServer((req, res) => {
+  return http.createServer(async (req, res) => {
     try {
-      const method = req.method || 'GET';
+      const method = (req.method || 'GET').toUpperCase();
+      const rawUrl = req.url || '/';
+      let cleanUrl;
+      try {
+        cleanUrl = decodeURIComponent(rawUrl.split('?')[0].split('#')[0]);
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('400 Bad Request');
+        return;
+      }
+
+      if (cleanUrl === '/api/room' || cleanUrl === '/api/room/') {
+        await roomHandler(req, res);
+        return;
+      }
+
       if (method !== 'GET' && method !== 'HEAD') {
         res.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('405 Method Not Allowed');
         return;
       }
-
-      const rawUrl = req.url || '/';
-      const cleanUrl = decodeURIComponent(rawUrl.split('?')[0].split('#')[0]);
 
       if (cleanUrl === '/favicon.ico') {
         res.writeHead(204);
@@ -54,7 +71,8 @@ export function createServer(rootDir = ROOT_DIR) {
       const safePath = path.resolve(resolvedRoot, relativePath);
 
       // Prevent directory traversal outside rootDir
-      if (!safePath.startsWith(resolvedRoot)) {
+      const isInsideRoot = safePath === resolvedRoot || safePath.startsWith(resolvedRoot + path.sep);
+      if (!isInsideRoot) {
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('403 Forbidden');
         return;
@@ -92,7 +110,9 @@ export function createServer(rootDir = ROOT_DIR) {
         stream.pipe(res);
       });
     } catch (err) {
-      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      }
       res.end('500 Internal Server Error');
     }
   });

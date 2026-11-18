@@ -19,6 +19,12 @@ import {
 } from './championship.js';
 import { createBikeShowroom } from './showroom.js';
 import { initWebsiteShowcase } from './showcase.js';
+import {
+  createOnlineSession,
+  encodeRiderState,
+  decodeRiderState,
+  interpolateRider
+} from './netcode.js';
 
 export const GAME_STATES = {
   MENU: 'MENU',
@@ -86,7 +92,7 @@ function clamp(v, min, max) {
 
 /**
  * Parses URL query parameters for automated verification and quick launch hooks:
- * ?autostart=1&mode=gp|duel|solo|championship&track=sakura|monterey|cathedral&split=horizontal|vertical&demo=1
+ * ?autostart=1&mode=gp|duel|solo|championship|online-duel&track=sakura|monterey|cathedral&split=horizontal|vertical&demo=1&room=XXXXX&relay=1
  */
 export function parseUrlConfig(searchStr = typeof window !== 'undefined' && window.location ? window.location.search : '') {
   const params = new URLSearchParams(searchStr || '');
@@ -100,12 +106,19 @@ export function parseUrlConfig(searchStr = typeof window !== 'undefined' && wind
     laps: null,
     difficulty: null,
     p1Camera: null,
-    p2Camera: null
+    p2Camera: null,
+    room: null,
+    relay: params.get('relay') === '1' || params.get('relay') === 'true'
   };
 
   const modeParam = (params.get('mode') || '').toLowerCase();
-  if (['gp', 'duel', 'solo', 'championship'].includes(modeParam)) {
+  if (['gp', 'duel', 'solo', 'championship', 'online-duel'].includes(modeParam)) {
     parsed.mode = modeParam;
+  }
+
+  const rawRoom = (params.get('room') || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (rawRoom.length >= 4) {
+    parsed.room = rawRoom;
   }
 
   const trackParam = (params.get('track') || '').toLowerCase();
@@ -158,6 +171,40 @@ export function initGame() {
   const resultsOverlay = document.getElementById('results-overlay');
   const championshipOverlay = document.getElementById('championship-overlay');
   const replayOverlay = document.getElementById('replay-overlay');
+  const onlineLobbyOverlay = document.getElementById('online-lobby-overlay');
+  const onlineNetBadge = document.getElementById('online-net-badge');
+  const onlineAwayBanner = document.getElementById('online-away-banner');
+
+  const onlineEls = {
+    overlay: onlineLobbyOverlay,
+    statusPill: document.getElementById('online-status-pill'),
+    statusText: document.getElementById('online-status-text'),
+    pingVal: document.getElementById('online-ping-val'),
+    errorBanner: document.getElementById('online-error-banner'),
+    errorText: document.getElementById('online-error-text'),
+    btnRetry: document.getElementById('btn-online-retry'),
+    btnClose: document.getElementById('btn-online-close'),
+    tabCreate: document.getElementById('btn-online-tab-create'),
+    tabJoin: document.getElementById('btn-online-tab-join'),
+    panelHost: document.getElementById('online-panel-host'),
+    panelGuest: document.getElementById('online-panel-guest'),
+    hostTrack: document.getElementById('online-host-track'),
+    hostLaps: document.getElementById('online-host-laps'),
+    hostBike: document.getElementById('online-host-bike'),
+    btnCreate: document.getElementById('btn-online-create'),
+    roomCode: document.getElementById('online-room-code'),
+    btnCopyLink: document.getElementById('btn-online-copy-link'),
+    copyFeedback: document.getElementById('online-copy-feedback'),
+    hostPeerStatus: document.getElementById('online-host-peer-status'),
+    btnStart: document.getElementById('btn-online-start'),
+    joinCode: document.getElementById('online-join-code'),
+    btnJoin: document.getElementById('btn-online-join'),
+    guestBike: document.getElementById('online-guest-bike'),
+    guestMatchInfo: document.getElementById('online-guest-match-info'),
+    btnReady: document.getElementById('btn-online-ready'),
+    guestWaitHint: document.getElementById('online-guest-wait-hint'),
+    relayHint: document.getElementById('online-relay-hint')
+  };
 
   const minimapCanvas = document.getElementById('minimap-canvas');
   const minimapCtx = minimapCanvas ? minimapCanvas.getContext('2d') : null;
@@ -207,9 +254,50 @@ export function initGame() {
   let goBannerTimer = 0;
   let postFinishTimer = 0;
 
+  // Online 1v1 Duel state (Owner-Authoritative WebRTC)
+  let onlineRole = null; // null | 'host' | 'guest'
+  let localRiderIndex = 0; // 0 = Host, 1 = Guest
+  let onlineSession = null;
+  let onlinePhase = 'idle'; // 'idle' | 'signaling' | 'waiting' | 'connecting' | 'connected' | 'disconnected' | 'error'
+  let onlineTransportType = null;
+  let onlinePingMs = null;
+  let onlineRoomCode = '';
+  let onlineError = '';
+  let onlineRelayOnly = false;
+  let onlineLobbyTab = 'create'; // 'create' | 'join'
+  let onlineGuestReady = false;
+  let onlinePeerConnected = false;
+  let onlineSendSeq = 0;
+  let onlineLastSendAt = 0;
+  let onlineLocalStartAt = 0;
+  let onlineOpponentAway = false;
+  let onlineOpponentDisconnected = false;
+  let onlineLastReportedLap = 1;
+  let onlineFinishSent = false;
+  let onlineResultsPublished = false;
+  let onlineRxOffset = null;
+  let opponentBuffer = [];
+  let onlineLastAttempt = null; // { role: 'host' | 'guest', code?: string }
+  const onlineLobbyConfig = {
+    trackId: config.trackId,
+    laps: config.laps,
+    hostBikeId: config.p1BikeId,
+    guestBikeId: config.p2BikeId
+  };
+
+  function isOnlineLobbyOpen() {
+    return Boolean(onlineLobbyOverlay && !onlineLobbyOverlay.classList.contains('hidden'));
+  }
+
   // Isolate website keyboard scrolling & slider controls before input.js binds global keydown preventDefault
   window.addEventListener('keydown', (e) => {
-    if (gameState === GAME_STATES.MENU && viewMode === 'site') {
+    if (e.code === 'Escape' && isOnlineLobbyOpen() && gameState === GAME_STATES.MENU) {
+      e.preventDefault();
+      closeOnlineLobby();
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (gameState === GAME_STATES.MENU && (viewMode === 'site' || isOnlineLobbyOpen())) {
       if (e.code === 'KeyM' && !e.repeat) {
         const tag = e.target && e.target.tagName;
         if (tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'TEXTAREA') {
@@ -227,13 +315,13 @@ export function initGame() {
   const championship = createChampionshipManager();
   const input = createInputManager({
     onToggleSplit: () => {
-      if (viewMode !== 'site') toggleSplitOrientation();
+      if (viewMode !== 'site' && !onlineRole && !isOnlineLobbyOpen()) toggleSplitOrientation();
     },
     onTogglePause: () => handlePauseShortcut(),
     onToggleMute: () => handleMuteShortcut(),
     onCycleCamera: (slot) => {
       if (gameState === GAME_STATES.RACING || gameState === GAME_STATES.COUNTDOWN) {
-        cyclePlayerCameraMode(slot);
+        cyclePlayerCameraMode(onlineRole ? 0 : slot);
       }
     }
   });
@@ -311,10 +399,695 @@ export function initGame() {
   }
 
   // ---------------------------------------------------------------------------
+  // ONLINE 1v1 DUEL HELPERS (OWNER-AUTHORITATIVE WEBRTC)
+  // ---------------------------------------------------------------------------
+  function getLocalRider() {
+    if (!onlineRole) return p1Rider;
+    return localRiderIndex === 0 ? p1Rider : p2Rider;
+  }
+
+  function getRemoteRider() {
+    if (!onlineRole) return p2Rider;
+    return localRiderIndex === 0 ? p2Rider : p1Rider;
+  }
+
+  function getLocalFocusIndex() {
+    if (!onlineRole) return 0;
+    const lr = getLocalRider();
+    const idx = lr ? riders.indexOf(lr) : 0;
+    return idx >= 0 ? idx : 0;
+  }
+
+  function buildOnlineAudioRiders() {
+    const lr = getLocalRider();
+    return riders.map((r) => (r === lr ? { ...r, isAI: false } : { ...r, isAI: true }));
+  }
+
+  function formatTransportLabel(type) {
+    return type === 'relay' ? 'RELAY' : 'P2P';
+  }
+
+  function updateHudPlayerBadge() {
+    const badge = document.querySelector('#hud-p1 .player-badge');
+    if (!badge) return;
+    if (onlineRole === 'guest') {
+      badge.textContent = 'P2';
+      badge.classList.remove('p1-badge');
+      badge.classList.add('p2-badge');
+    } else {
+      badge.textContent = 'P1';
+      badge.classList.remove('p2-badge');
+      badge.classList.add('p1-badge');
+    }
+  }
+
+  function updateOnlineHudBadges() {
+    const activeRace = Boolean(onlineRole && (gameState === GAME_STATES.COUNTDOWN || gameState === GAME_STATES.RACING));
+    if (onlineNetBadge) {
+      if (activeRace) {
+        onlineNetBadge.classList.remove('hidden');
+        const transport = onlineTransportType === 'relay' ? 'relay' : 'p2p';
+        onlineNetBadge.setAttribute('data-transport', transport);
+        const pingStr = onlinePingMs != null ? `${onlinePingMs}ms` : '--ms';
+        onlineNetBadge.textContent = `ONLINE · ${formatTransportLabel(onlineTransportType)} · ${pingStr}`;
+      } else {
+        onlineNetBadge.classList.add('hidden');
+      }
+    }
+
+    if (onlineAwayBanner) {
+      if (activeRace && onlineOpponentDisconnected) {
+        onlineAwayBanner.classList.remove('hidden');
+        onlineAwayBanner.textContent = 'OPPONENT DISCONNECTED — CONTINUING SOLO';
+      } else if (activeRace && onlineOpponentAway) {
+        onlineAwayBanner.classList.remove('hidden');
+        onlineAwayBanner.textContent = 'OPPONENT AWAY';
+      } else {
+        onlineAwayBanner.classList.add('hidden');
+      }
+    }
+  }
+
+  function updateOnlineLobbyUi() {
+    if (onlineEls.statusPill && onlineEls.statusText) {
+      onlineEls.statusPill.setAttribute('data-phase', onlinePhase);
+      let label = 'READY TO CONNECT';
+      if (onlinePhase === 'signaling') label = 'SIGNALING...';
+      else if (onlinePhase === 'waiting') label = 'WAITING FOR OPPONENT';
+      else if (onlinePhase === 'connecting') label = 'CONNECTING...';
+      else if (onlinePhase === 'connected') label = `CONNECTED (${formatTransportLabel(onlineTransportType)})`;
+      else if (onlinePhase === 'disconnected') label = 'DISCONNECTED';
+      else if (onlinePhase === 'error') label = 'CONNECTION ERROR';
+      onlineEls.statusText.textContent = label;
+    }
+
+    if (onlineEls.pingVal) {
+      onlineEls.pingVal.textContent =
+        onlinePeerConnected && onlinePingMs != null ? `${onlinePingMs} ms` : '--';
+    }
+
+    if (onlineEls.errorBanner && onlineEls.errorText) {
+      if (onlineError) {
+        onlineEls.errorBanner.classList.remove('hidden');
+        onlineEls.errorText.textContent = onlineError;
+      } else {
+        onlineEls.errorBanner.classList.add('hidden');
+      }
+    }
+
+    const isCreateTab = onlineLobbyTab !== 'join';
+    if (onlineEls.tabCreate) {
+      onlineEls.tabCreate.classList.toggle('active', isCreateTab);
+      onlineEls.tabCreate.setAttribute('aria-selected', isCreateTab ? 'true' : 'false');
+    }
+    if (onlineEls.tabJoin) {
+      onlineEls.tabJoin.classList.toggle('active', !isCreateTab);
+      onlineEls.tabJoin.setAttribute('aria-selected', !isCreateTab ? 'true' : 'false');
+    }
+    if (onlineEls.panelHost) onlineEls.panelHost.classList.toggle('hidden', !isCreateTab);
+    if (onlineEls.panelGuest) onlineEls.panelGuest.classList.toggle('hidden', isCreateTab);
+
+    if (onlineEls.hostTrack) onlineEls.hostTrack.value = onlineLobbyConfig.trackId;
+    if (onlineEls.hostLaps) onlineEls.hostLaps.value = String(onlineLobbyConfig.laps);
+    if (onlineEls.hostBike) onlineEls.hostBike.value = onlineLobbyConfig.hostBikeId;
+    if (onlineEls.guestBike) onlineEls.guestBike.value = onlineLobbyConfig.guestBikeId;
+
+    if (onlineEls.roomCode) {
+      onlineEls.roomCode.textContent = onlineRoomCode || '-----';
+    }
+    if (onlineEls.btnCopyLink) {
+      onlineEls.btnCopyLink.disabled = !onlineRoomCode;
+    }
+
+    const hostBusy =
+      onlineRole === 'host' &&
+      ['signaling', 'waiting', 'connecting', 'connected'].includes(onlinePhase);
+    if (onlineEls.btnCreate) {
+      onlineEls.btnCreate.disabled = hostBusy;
+    }
+
+    if (onlineEls.hostPeerStatus) {
+      if (!onlineRoomCode) {
+        onlineEls.hostPeerStatus.textContent =
+          'CREATE A ROOM TO GENERATE A 5-CHARACTER INVITE CODE FOR YOUR OPPONENT.';
+      } else if (!onlinePeerConnected) {
+        onlineEls.hostPeerStatus.textContent =
+          `ROOM ${onlineRoomCode} OPEN — SHARE THE CODE OR INVITE LINK WITH YOUR OPPONENT.`;
+      } else {
+        const gb = getBikeById(onlineLobbyConfig.guestBikeId);
+        onlineEls.hostPeerStatus.textContent = onlineGuestReady
+          ? `GUEST CONNECTED · ${gb.name.toUpperCase()} #${gb.number} · READY TO RACE!`
+          : `GUEST CONNECTED · ${gb.name.toUpperCase()} #${gb.number} · CHOOSING MACHINE...`;
+      }
+    }
+
+    if (onlineEls.btnStart) {
+      onlineEls.btnStart.disabled = !(onlineRole === 'host' && onlinePeerConnected && onlineGuestReady);
+    }
+
+    const guestBusy =
+      onlineRole === 'guest' &&
+      ['signaling', 'connecting', 'connected'].includes(onlinePhase);
+    if (onlineEls.btnJoin) {
+      onlineEls.btnJoin.disabled = guestBusy;
+    }
+    if (onlineEls.btnReady) {
+      onlineEls.btnReady.disabled = !(onlineRole === 'guest' && onlinePeerConnected);
+      onlineEls.btnReady.textContent = onlineGuestReady ? 'READY ✓' : 'READY';
+      onlineEls.btnReady.classList.toggle('is-ready', onlineGuestReady);
+      onlineEls.btnReady.setAttribute('aria-pressed', onlineGuestReady ? 'true' : 'false');
+    }
+
+    if (onlineEls.guestMatchInfo) {
+      if (onlinePeerConnected) {
+        const trk = TRACKS.find((t) => t.id === onlineLobbyConfig.trackId) || TRACKS[0];
+        const hb = getBikeById(onlineLobbyConfig.hostBikeId);
+        onlineEls.guestMatchInfo.textContent =
+          `HOST CONNECTED · ${trk.name.toUpperCase()} (${onlineLobbyConfig.laps} LAPS) · HOST: ${hb.name.toUpperCase()} #${hb.number}`;
+      } else if (onlineRole === 'guest' && (onlinePhase === 'signaling' || onlinePhase === 'connecting')) {
+        onlineEls.guestMatchInfo.textContent = `CONNECTING TO ROOM ${onlineRoomCode}...`;
+      } else {
+        onlineEls.guestMatchInfo.textContent =
+          'ENTER THE HOST\'S 5-CHARACTER CODE OR OPEN AN INVITE LINK (?room=XXXXX) TO CONNECT.';
+      }
+    }
+
+    if (onlineEls.guestWaitHint) {
+      if (!onlinePeerConnected) {
+        onlineEls.guestWaitHint.textContent = 'CONNECT TO ROOM BEFORE MARKING READY.';
+      } else if (onlineGuestReady) {
+        onlineEls.guestWaitHint.textContent = 'READY! WAITING FOR HOST TO START ONLINE DUEL...';
+      } else {
+        onlineEls.guestWaitHint.textContent = 'PICK YOUR MACHINE AND CLICK READY.';
+      }
+    }
+
+    if (onlineEls.relayHint) {
+      onlineEls.relayHint.textContent = onlineRelayOnly
+        ? 'FORCED TURN RELAY MODE (?relay=1)'
+        : 'WEBRTC P2P + TURN RELAY FALLBACK';
+    }
+  }
+
+  function sendOnlineLobbySync() {
+    if (!onlineSession || !onlinePeerConnected) return;
+    if (onlineRole === 'host') {
+      onlineSession.sendLobby({
+        type: 'hostConfig',
+        trackId: onlineLobbyConfig.trackId,
+        laps: onlineLobbyConfig.laps,
+        hostBikeId: onlineLobbyConfig.hostBikeId
+      });
+    } else if (onlineRole === 'guest') {
+      onlineSession.sendLobby({
+        type: 'guestState',
+        guestBikeId: onlineLobbyConfig.guestBikeId,
+        ready: onlineGuestReady
+      });
+    }
+  }
+
+  function teardownOnlineSession(options = {}) {
+    const preserveRole = Boolean(options.preserveRole);
+    if (onlineSession) {
+      try {
+        onlineSession.close();
+      } catch (_err) {
+        // ignore close errors
+      }
+      onlineSession = null;
+    }
+    onlinePhase = 'idle';
+    onlineTransportType = null;
+    onlinePingMs = null;
+    onlineRoomCode = '';
+    onlineError = '';
+    onlineGuestReady = false;
+    onlinePeerConnected = false;
+    onlineOpponentAway = false;
+    onlineOpponentDisconnected = false;
+    opponentBuffer = [];
+    onlineRxOffset = null;
+    onlineSendSeq = 0;
+    onlineLastSendAt = 0;
+    onlineLastReportedLap = 1;
+    onlineFinishSent = false;
+    onlineResultsPublished = false;
+    if (!preserveRole) {
+      onlineRole = null;
+      localRiderIndex = 0;
+    }
+    updateOnlineLobbyUi();
+    updateOnlineHudBadges();
+    updateHudPlayerBadge();
+  }
+
+  function handleIncomingPeerState(pkt, meta = null) {
+    if (!pkt || !onlineRole) return;
+    const nowMs = meta && Number.isFinite(meta.receivedAt) ? meta.receivedAt : performance.now();
+    const syncInfo = onlineSession?.getClockSync ? onlineSession.getClockSync() : null;
+
+    let localT;
+    if (syncInfo && syncInfo.sampleCount > 0 && meta && Number.isFinite(meta.localTime)) {
+      localT = meta.localTime;
+    } else {
+      const sampleOffset = nowMs - pkt.t;
+      if (onlineRxOffset === null || !Number.isFinite(onlineRxOffset)) {
+        onlineRxOffset = sampleOffset;
+      } else if (sampleOffset < onlineRxOffset) {
+        onlineRxOffset = onlineRxOffset * 0.5 + sampleOffset * 0.5;
+      } else {
+        onlineRxOffset = onlineRxOffset * 0.995 + sampleOffset * 0.005;
+      }
+      localT = pkt.t + onlineRxOffset;
+    }
+    const normalized = { ...pkt, t: localT };
+
+    if (opponentBuffer.length === 0 || localT >= opponentBuffer[opponentBuffer.length - 1].t) {
+      opponentBuffer.push(normalized);
+    } else if (opponentBuffer[opponentBuffer.length - 1].t - localT <= 250) {
+      opponentBuffer.push(normalized);
+      opponentBuffer.sort((a, b) => a.t - b.t);
+    }
+    if (opponentBuffer.length > 40) {
+      opponentBuffer.splice(0, opponentBuffer.length - 40);
+    }
+  }
+
+  function updateRemoteProxyFromBuffer(nowMs) {
+    if (!onlineRole || !currentTrack || opponentBuffer.length === 0) return;
+    const remoteRider = getRemoteRider();
+    if (!remoteRider) return;
+
+    const renderTime = nowMs - 100;
+    const snap = interpolateRider(opponentBuffer, renderTime, currentTrack.totalLength, 150);
+    if (!snap) return;
+
+    remoteRider.s = snap.s;
+    remoteRider.d = snap.d;
+    remoteRider.psi = snap.psi;
+    remoteRider.speed = snap.speed;
+    remoteRider.rpm = snap.rpm;
+    remoteRider.gear = snap.gear;
+    remoteRider.lean = snap.lean;
+    remoteRider.wheelieAngle = snap.wheelieAngle;
+    remoteRider.rearSlip = snap.rearSlip;
+    remoteRider.brake = snap.brake;
+    remoteRider.throttle = snap.throttle;
+    remoteRider.tuck = Boolean(snap.tuck);
+    remoteRider.onKerb = Boolean(snap.onKerb);
+    remoteRider.offTrack = Boolean(snap.offTrack);
+
+    if (!remoteRider.finished) {
+      remoteRider.lap = Math.max(1, snap.lap || 1);
+      remoteRider.lapTime = snap.lapTime || 0;
+      if (snap.bestLapTime !== null && snap.bestLapTime !== undefined) {
+        remoteRider.bestLapTime = snap.bestLapTime;
+      }
+      remoteRider.totalTime = snap.totalTime || 0;
+      if (snap.finished) {
+        remoteRider.finished = true;
+      }
+    }
+
+    remoteRider.totalProgress = (Math.max(1, remoteRider.lap) - 1) * currentTrack.totalLength + remoteRider.s;
+    remoteRider.totalDistance = remoteRider.totalProgress;
+
+    const worldPose = currentTrack.frenetToWorld(remoteRider.s, remoteRider.d, remoteRider.psi);
+    remoteRider.world.x = worldPose.x;
+    remoteRider.world.y = worldPose.y;
+    remoteRider.world.z = worldPose.z;
+    remoteRider.world.heading = worldPose.heading;
+    remoteRider.world.pitch = worldPose.pitch + (remoteRider.wheelieAngle || 0);
+    remoteRider.world.roll = remoteRider.lean || 0;
+  }
+
+  function maybeSendLocalOnlineState(nowMs) {
+    if (!onlineRole || !onlineSession || document.hidden) return;
+    if (nowMs - onlineLastSendAt < 33.333) return;
+    const localRider = getLocalRider();
+    if (!localRider) return;
+    onlineLastSendAt = nowMs;
+    const pkt = encodeRiderState(localRider, ++onlineSendSeq, nowMs);
+    onlineSession.sendPeerState(pkt);
+  }
+
+  function reportOnlineLapAndFinish(localRider) {
+    if (!onlineRole || !onlineSession || !localRider) return;
+    if (localRider.lap > onlineLastReportedLap && !localRider.finished) {
+      onlineLastReportedLap = localRider.lap;
+      onlineSession.sendRaceEvent({
+        type: 'lap',
+        riderId: localRider.id,
+        lap: localRider.lap,
+        lastLapTime: localRider.lastLapTime,
+        bestLapTime: localRider.bestLapTime,
+        totalTime: localRider.totalTime
+      });
+    }
+    if (localRider.finished && !onlineFinishSent) {
+      onlineFinishSent = true;
+      onlineSession.sendRaceEvent({
+        type: 'finish',
+        riderId: localRider.id,
+        totalTime: localRider.totalTime,
+        bestLapTime: localRider.bestLapTime,
+        lastLapTime: localRider.lastLapTime,
+        totalDistance: localRider.totalDistance
+      });
+    }
+  }
+
+  function handleOnlineRaceEvent(msg) {
+    if (!msg || typeof msg !== 'object' || !onlineRole) return;
+    const remoteRider = getRemoteRider();
+
+    if (msg.type === 'start' && onlineRole === 'guest') {
+      if (msg.trackId) onlineLobbyConfig.trackId = msg.trackId;
+      if (msg.laps) onlineLobbyConfig.laps = Number(msg.laps) || 3;
+      if (msg.hostBikeId) onlineLobbyConfig.hostBikeId = getBikeById(msg.hostBikeId).id;
+      if (msg.guestBikeId) onlineLobbyConfig.guestBikeId = getBikeById(msg.guestBikeId).id;
+
+      const nowMs = performance.now();
+      const syncInfo = onlineSession?.getClockSync ? onlineSession.getClockSync() : null;
+      let localStartAt = nowMs + 3000;
+      if (syncInfo && syncInfo.synced && typeof onlineSession.hostTimeToLocal === 'function') {
+        const mapped = onlineSession.hostTimeToLocal(msg.startAt);
+        if (Number.isFinite(mapped)) {
+          localStartAt = clamp(mapped, nowMs + 250, nowMs + 6000);
+        }
+      }
+      launchOnlineRaceSession(localStartAt);
+      return;
+    }
+
+    if (msg.type === 'away') {
+      onlineOpponentAway = true;
+      updateOnlineHudBadges();
+      return;
+    }
+
+    if (msg.type === 'back') {
+      onlineOpponentAway = false;
+      updateOnlineHudBadges();
+      return;
+    }
+
+    if (msg.type === 'lap' && remoteRider) {
+      remoteRider.lap = Math.max(remoteRider.lap || 1, Number(msg.lap) || 1);
+      if (msg.lastLapTime != null) remoteRider.lastLapTime = msg.lastLapTime;
+      if (msg.bestLapTime != null) remoteRider.bestLapTime = msg.bestLapTime;
+      return;
+    }
+
+    if (msg.type === 'finish' && remoteRider) {
+      remoteRider.finished = true;
+      if (Number.isFinite(Number(msg.totalTime))) remoteRider.totalTime = Number(msg.totalTime);
+      if (msg.bestLapTime !== undefined) remoteRider.bestLapTime = msg.bestLapTime;
+      if (msg.lastLapTime !== undefined) remoteRider.lastLapTime = msg.lastLapTime;
+      remoteRider.lap = config.laps + 1;
+      if (Number.isFinite(Number(msg.totalDistance))) {
+        remoteRider.totalDistance = Math.max(remoteRider.totalDistance || 0, Number(msg.totalDistance));
+      }
+      return;
+    }
+
+    if (msg.type === 'results' && onlineRole === 'guest' && Array.isArray(msg.standings)) {
+      if (!onlineResultsPublished) {
+        onlineResultsPublished = true;
+        showRaceResults(msg.standings);
+      }
+    }
+  }
+
+  function startOnlineSessionFlow({ role, code = null }) {
+    onlineLastAttempt = { role, code };
+    teardownOnlineSession({ preserveRole: true });
+    onlineRole = role;
+    localRiderIndex = role === 'host' ? 0 : 1;
+    onlineRoomCode = code ? String(code).trim().toUpperCase() : '';
+    onlineError = '';
+
+    if (onlineEls.joinCode && onlineRoomCode) {
+      onlineEls.joinCode.value = onlineRoomCode;
+    }
+
+    onlineSession = createOnlineSession({
+      role,
+      code: onlineRoomCode || undefined,
+      relayOnly: onlineRelayOnly,
+      hostMeta: role === 'host'
+        ? {
+            trackId: onlineLobbyConfig.trackId,
+            laps: onlineLobbyConfig.laps,
+            hostBikeId: onlineLobbyConfig.hostBikeId
+          }
+        : undefined,
+      guestMeta: role === 'guest'
+        ? { guestBikeId: onlineLobbyConfig.guestBikeId }
+        : undefined,
+      onStatus: (st) => {
+        if (!st) return;
+        onlinePhase = st.phase || onlinePhase;
+        if (st.code) onlineRoomCode = String(st.code).toUpperCase();
+        if (st.transportType) onlineTransportType = st.transportType;
+        if (typeof st.rttMs === 'number' && Number.isFinite(st.rttMs)) {
+          onlinePingMs = Math.max(0, Math.round(st.rttMs));
+        }
+        if (st.hostMeta && typeof st.hostMeta === 'object') {
+          if (st.hostMeta.trackId) onlineLobbyConfig.trackId = st.hostMeta.trackId;
+          if (st.hostMeta.laps) onlineLobbyConfig.laps = Number(st.hostMeta.laps) || 3;
+          if (st.hostMeta.hostBikeId) onlineLobbyConfig.hostBikeId = getBikeById(st.hostMeta.hostBikeId).id;
+        }
+        if (st.phase === 'connected') {
+          const firstConnect = !onlinePeerConnected;
+          onlinePeerConnected = true;
+          onlineError = '';
+          if (firstConnect) {
+            sendOnlineLobbySync();
+          }
+        } else if (st.phase === 'disconnected') {
+          onlinePeerConnected = false;
+          onlineGuestReady = false;
+          if (gameState === GAME_STATES.COUNTDOWN || gameState === GAME_STATES.RACING) {
+            onlineOpponentDisconnected = true;
+          } else if (isOnlineLobbyOpen()) {
+            onlineError = st.reason || 'Opponent disconnected from room.';
+          }
+        }
+        updateOnlineLobbyUi();
+        updateOnlineHudBadges();
+      },
+      onError: (errMsg) => {
+        onlinePhase = 'error';
+        onlinePeerConnected = false;
+        onlineGuestReady = false;
+        onlineError = String(errMsg || 'Online connection failed.');
+        updateOnlineLobbyUi();
+        updateOnlineHudBadges();
+      },
+      onLobby: (msg) => {
+        if (!msg || typeof msg !== 'object') return;
+        if (msg.type === 'hostConfig') {
+          if (msg.trackId && TRACKS.some((t) => t.id === msg.trackId)) {
+            onlineLobbyConfig.trackId = msg.trackId;
+          }
+          if (msg.laps) {
+            onlineLobbyConfig.laps = Number(msg.laps) || 3;
+          }
+          if (msg.hostBikeId) {
+            onlineLobbyConfig.hostBikeId = getBikeById(msg.hostBikeId).id;
+          }
+        } else if (msg.type === 'guestState') {
+          if (msg.guestBikeId) {
+            onlineLobbyConfig.guestBikeId = getBikeById(msg.guestBikeId).id;
+          }
+          onlineGuestReady = Boolean(msg.ready);
+        }
+        updateOnlineLobbyUi();
+      },
+      onRaceEvent: handleOnlineRaceEvent,
+      onPeerState: handleIncomingPeerState
+    });
+
+    updateOnlineLobbyUi();
+    return onlineSession.start();
+  }
+
+  function createOnlineRoom() {
+    onlineLobbyTab = 'create';
+    onlineLobbyConfig.trackId = onlineEls.hostTrack?.value || config.trackId;
+    onlineLobbyConfig.laps = Number(onlineEls.hostLaps?.value) || config.laps || 3;
+    onlineLobbyConfig.hostBikeId = getBikeById(onlineEls.hostBike?.value || config.p1BikeId).id;
+    return startOnlineSessionFlow({ role: 'host' });
+  }
+
+  function joinOnlineRoom(explicitCode = null) {
+    onlineLobbyTab = 'join';
+    const raw = explicitCode !== null ? explicitCode : onlineEls.joinCode?.value || '';
+    const cleaned = String(raw).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (cleaned.length < 4) {
+      onlineError = 'Enter a valid 5-character room code to join.';
+      onlinePhase = 'error';
+      updateOnlineLobbyUi();
+      return Promise.resolve({ ok: false, error: onlineError });
+    }
+    if (onlineEls.joinCode) onlineEls.joinCode.value = cleaned;
+    onlineLobbyConfig.guestBikeId = getBikeById(onlineEls.guestBike?.value || config.p2BikeId).id;
+    if (
+      onlineRole === 'guest' &&
+      onlineRoomCode === cleaned &&
+      ['signaling', 'connecting', 'connected'].includes(onlinePhase)
+    ) {
+      return Promise.resolve({ ok: true, role: 'guest', code: cleaned });
+    }
+    return startOnlineSessionFlow({ role: 'guest', code: cleaned });
+  }
+
+  function toggleOnlineReady() {
+    if (onlineRole !== 'guest' || !onlinePeerConnected) return false;
+    onlineGuestReady = !onlineGuestReady;
+    sendOnlineLobbySync();
+    updateOnlineLobbyUi();
+    return onlineGuestReady;
+  }
+
+  function hostStartOnlineDuel() {
+    if (onlineRole !== 'host' || !onlinePeerConnected || !onlineGuestReady || !onlineSession) {
+      return false;
+    }
+    const localStartAt = performance.now() + 3200;
+    onlineSession.sendRaceEvent({
+      type: 'start',
+      startAt: localStartAt,
+      trackId: onlineLobbyConfig.trackId,
+      laps: onlineLobbyConfig.laps,
+      hostBikeId: onlineLobbyConfig.hostBikeId,
+      guestBikeId: onlineLobbyConfig.guestBikeId
+    });
+    launchOnlineRaceSession(localStartAt);
+    return true;
+  }
+
+  function launchOnlineRaceSession(localStartAt) {
+    config.mode = 'online-duel';
+    config.trackId = onlineLobbyConfig.trackId;
+    config.laps = Number(onlineLobbyConfig.laps) || 3;
+    config.p1BikeId = getBikeById(onlineLobbyConfig.hostBikeId).id;
+    config.p2BikeId = getBikeById(onlineLobbyConfig.guestBikeId).id;
+    syncSelectAndPills('select-mode', 'online-duel');
+    syncSelectAndPills('select-track', config.trackId);
+    syncSelectAndPills('select-laps', config.laps);
+    updateP2GarageLabels();
+
+    opponentBuffer = [];
+    onlineRxOffset = null;
+    onlineSendSeq = 0;
+    onlineLastSendAt = 0;
+    onlineLastReportedLap = 1;
+    onlineFinishSent = false;
+    onlineResultsPublished = false;
+    onlineOpponentAway = false;
+    onlineOpponentDisconnected = false;
+
+    if (onlineLobbyOverlay) onlineLobbyOverlay.classList.add('hidden');
+    applySiteModeClasses('race');
+
+    audio.init();
+    input.reset();
+    physicsAccumulator = 0;
+    postFinishTimer = 0;
+
+    buildRaceGrid();
+    updateHudPlayerBadge();
+
+    replay.reset({
+      trackId: config.trackId,
+      trackLength: currentTrack.totalLength
+    });
+    replay.record(riders, 0);
+
+    if (paddockMenu) {
+      paddockMenu.classList.add('hidden');
+      paddockMenu.classList.remove('active');
+    }
+    if (pauseOverlay) pauseOverlay.classList.add('hidden');
+    if (resultsOverlay) resultsOverlay.classList.add('hidden');
+    if (championshipOverlay) championshipOverlay.classList.add('hidden');
+    if (replayOverlay) replayOverlay.classList.add('hidden');
+    if (raceHud) raceHud.classList.remove('hidden');
+
+    gameState = GAME_STATES.COUNTDOWN;
+    onlineLocalStartAt = localStartAt;
+    countdownTimer = Math.max(0.4, (localStartAt - performance.now()) / 1000);
+    countdownDuration = countdownTimer;
+    lastLitLights = 0;
+    goBannerTimer = 0;
+    renderer.setStartLights(0, false);
+    updateCountdownVisuals(0, false, 'ENGINES START — GET READY');
+    if (countdownOverlay) countdownOverlay.classList.remove('hidden');
+    updateOnlineHudBadges();
+    lastFrameTime = performance.now();
+  }
+
+  function setOnlineLobbyTab(tab = 'create') {
+    onlineLobbyTab = tab === 'join' ? 'join' : 'create';
+    updateOnlineLobbyUi();
+  }
+
+  function openOnlineLobby(opts = {}) {
+    audio.silence();
+    if (opts.tab) {
+      onlineLobbyTab = opts.tab === 'join' ? 'join' : 'create';
+    }
+    if (opts.trackId && TRACKS.some((t) => t.id === opts.trackId)) {
+      onlineLobbyConfig.trackId = opts.trackId;
+    } else if (!onlineRole) {
+      onlineLobbyConfig.trackId = config.trackId;
+    }
+    if (opts.laps) {
+      onlineLobbyConfig.laps = Number(opts.laps) || 3;
+    } else if (!onlineRole) {
+      onlineLobbyConfig.laps = config.laps;
+    }
+    if (opts.bikeId) {
+      onlineLobbyConfig.hostBikeId = getBikeById(opts.bikeId).id;
+    } else if (!onlineRole) {
+      onlineLobbyConfig.hostBikeId = config.p1BikeId;
+    }
+    if (!onlineRole) {
+      onlineLobbyConfig.guestBikeId = config.p2BikeId;
+    }
+    if (opts.roomCode && onlineEls.joinCode) {
+      onlineEls.joinCode.value = String(opts.roomCode).trim().toUpperCase();
+    }
+    if (resultsOverlay) resultsOverlay.classList.add('hidden');
+    if (pauseOverlay) pauseOverlay.classList.add('hidden');
+    if (raceHud) raceHud.classList.add('hidden');
+    if (showroom) showroom.setActive(false);
+    if (showcase) showcase.setActive(false);
+    if (onlineLobbyOverlay) onlineLobbyOverlay.classList.remove('hidden');
+    updateOnlineLobbyUi();
+  }
+
+  function closeOnlineLobby() {
+    if (onlineLobbyOverlay) onlineLobbyOverlay.classList.add('hidden');
+    teardownOnlineSession();
+    if (viewMode === 'site') {
+      ensureShowroom();
+      if (showroom) {
+        showroom.setActive(true);
+        showroom.resize();
+      }
+      if (showcase) showcase.setActive(true);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // SPLIT ORIENTATION, AUDIO & PAUSE CONTROLS
   // ---------------------------------------------------------------------------
   function getEffectiveSplitMode() {
-    if (config.mode === 'solo') return 'single';
+    if (config.mode === 'solo' || config.mode === 'online-duel' || onlineRole) return 'single';
     return config.splitMode === 'vertical' ? 'vertical' : 'horizontal';
   }
 
@@ -327,6 +1100,7 @@ export function initGame() {
   }
 
   function toggleSplitOrientation() {
+    if (onlineRole) return;
     config.splitMode = config.splitMode === 'horizontal' ? 'vertical' : 'horizontal';
     syncSelectAndPills('select-split', config.splitMode);
     applySplitModeToDomAndRenderer();
@@ -361,6 +1135,12 @@ export function initGame() {
       exitReplayMode();
       return;
     }
+    if (onlineRole && (gameState === GAME_STATES.RACING || gameState === GAME_STATES.COUNTDOWN)) {
+      if (pauseOverlay) {
+        pauseOverlay.classList.toggle('hidden');
+      }
+      return;
+    }
     if (gameState === GAME_STATES.RACING || gameState === GAME_STATES.COUNTDOWN) {
       stateBeforePause = gameState;
       gameState = GAME_STATES.PAUSED;
@@ -372,6 +1152,10 @@ export function initGame() {
   }
 
   function resumeFromPause() {
+    if (onlineRole) {
+      if (pauseOverlay) pauseOverlay.classList.add('hidden');
+      return;
+    }
     if (gameState !== GAME_STATES.PAUSED) return;
     if (pauseOverlay) pauseOverlay.classList.add('hidden');
     gameState = stateBeforePause || GAME_STATES.RACING;
@@ -397,7 +1181,7 @@ export function initGame() {
     // Place P1 and P2 on the front row at s = 18m so totalDistance is positive and monotonic
     p1Rider = createRiderState({
       id: 'p1',
-      name: `Player 1 (#${p1Bike.number})`,
+      name: onlineRole ? `Host (#${p1Bike.number})` : `Player 1 (#${p1Bike.number})`,
       isAI: false,
       playerIndex: 0,
       bike: p1Bike,
@@ -408,10 +1192,15 @@ export function initGame() {
     });
     riders.push(p1Rider);
 
-    if (config.mode === 'gp' || config.mode === 'championship' || config.mode === 'duel') {
+    if (
+      config.mode === 'gp' ||
+      config.mode === 'championship' ||
+      config.mode === 'duel' ||
+      config.mode === 'online-duel'
+    ) {
       p2Rider = createRiderState({
         id: 'p2',
-        name: `Player 2 (#${p2Bike.number})`,
+        name: onlineRole ? `Guest (#${p2Bike.number})` : `Player 2 (#${p2Bike.number})`,
         isAI: false,
         playerIndex: 1,
         bike: p2Bike,
@@ -425,8 +1214,9 @@ export function initGame() {
       p2Rider = null;
     }
 
-    // Add AI riders for full 8-rider Grand Prix / Championship grid
-    const aiCount = config.mode === 'duel' ? 0 : config.mode === 'solo' ? 7 : 6;
+    // Add AI riders for full 8-rider Grand Prix / Championship grid (0 AI for local/online 1v1 duel)
+    const aiCount =
+      config.mode === 'duel' || config.mode === 'online-duel' ? 0 : config.mode === 'solo' ? 7 : 6;
     for (let i = 0; i < aiCount; i++) {
       const slotIndex = riders.length; // 1..7 or 2..7
       const row = Math.floor(slotIndex / 2);
@@ -553,6 +1343,7 @@ export function initGame() {
 
   function openPaddock(opts = {}) {
     audio.silence();
+    teardownOnlineSession();
     gameState = GAME_STATES.MENU;
     if (opts && opts.bikeId) {
       setBikeSelection(1, opts.bikeId);
@@ -567,6 +1358,7 @@ export function initGame() {
     if (championshipOverlay) championshipOverlay.classList.add('hidden');
     if (replayOverlay) replayOverlay.classList.add('hidden');
     if (countdownOverlay) countdownOverlay.classList.add('hidden');
+    if (onlineLobbyOverlay) onlineLobbyOverlay.classList.add('hidden');
     applySiteModeClasses('paddock');
     refreshChampionshipMenuBanner();
     buildRaceGrid();
@@ -575,6 +1367,7 @@ export function initGame() {
 
   function returnToSite() {
     audio.silence();
+    teardownOnlineSession();
     gameState = GAME_STATES.MENU;
     if (raceHud) raceHud.classList.add('hidden');
     if (pauseOverlay) pauseOverlay.classList.add('hidden');
@@ -582,6 +1375,7 @@ export function initGame() {
     if (championshipOverlay) championshipOverlay.classList.add('hidden');
     if (replayOverlay) replayOverlay.classList.add('hidden');
     if (countdownOverlay) countdownOverlay.classList.add('hidden');
+    if (onlineLobbyOverlay) onlineLobbyOverlay.classList.add('hidden');
     applySiteModeClasses('site');
   }
 
@@ -609,6 +1403,13 @@ export function initGame() {
   }
 
   function startRaceSession() {
+    if (config.mode === 'online-duel' && !onlineRole) {
+      openOnlineLobby({ tab: 'create' });
+      return;
+    }
+
+    teardownOnlineSession();
+    updateHudPlayerBadge();
     applySiteModeClasses('race');
 
     // If starting in Championship mode, sync track to the current championship round
@@ -681,20 +1482,32 @@ export function initGame() {
   }
 
   function stepCountdown(dt) {
-    countdownTimer -= dt;
+    if (onlineRole) {
+      const nowMs = performance.now();
+      countdownTimer = (onlineLocalStartAt - nowMs) / 1000;
+      const localRider = getLocalRider();
+      if (localRider) {
+        const pIn = config.demo ? { throttle: 0.75 } : input.getPlayerInput(0);
+        localRider.throttle = pIn.throttle;
+        localRider.rpm = 4200 + pIn.throttle * 7600 + Math.sin(nowMs * 0.03) * 180;
+      }
+      audio.update(buildOnlineAudioRiders(), { splitMode: 'single' });
+    } else {
+      countdownTimer -= dt;
 
-    // Allow human players (or AI in demo mode) to rev their 2-stroke engines on the start line
-    const p1In = config.demo ? { throttle: 0.75 } : input.getPlayerInput(0);
-    if (p1Rider) {
-      p1Rider.throttle = p1In.throttle;
-      p1Rider.rpm = 4200 + p1In.throttle * 7600 + Math.sin(performance.now() * 0.03) * 180;
+      // Allow human players (or AI in demo mode) to rev their 2-stroke engines on the start line
+      const p1In = config.demo ? { throttle: 0.75 } : input.getPlayerInput(0);
+      if (p1Rider) {
+        p1Rider.throttle = p1In.throttle;
+        p1Rider.rpm = 4200 + p1In.throttle * 7600 + Math.sin(performance.now() * 0.03) * 180;
+      }
+      if (p2Rider) {
+        const p2In = config.demo ? { throttle: 0.72 } : input.getPlayerInput(1);
+        p2Rider.throttle = p2In.throttle;
+        p2Rider.rpm = 4200 + p2In.throttle * 7600 + Math.cos(performance.now() * 0.03) * 180;
+      }
+      audio.update(riders, { splitMode: getEffectiveSplitMode() });
     }
-    if (p2Rider) {
-      const p2In = config.demo ? { throttle: 0.72 } : input.getPlayerInput(1);
-      p2Rider.throttle = p2In.throttle;
-      p2Rider.rpm = 4200 + p2In.throttle * 7600 + Math.cos(performance.now() * 0.03) * 180;
-    }
-    audio.update(riders, { splitMode: getEffectiveSplitMode() });
 
     const stepInterval = Math.max(0.15, (countdownDuration * 0.9) / 5);
     const elapsed = countdownDuration - countdownTimer;
@@ -711,6 +1524,7 @@ export function initGame() {
     } else {
       // GREEN LIGHTS — GO!
       gameState = GAME_STATES.RACING;
+      physicsAccumulator = 0;
       goBannerTimer = config.autostart ? 0.45 : 1.15;
       renderer.setStartLights(5, true);
       updateCountdownVisuals(5, true, 'GO! GO! GO!');
@@ -722,6 +1536,21 @@ export function initGame() {
   // FIXED-TIMESTEP PHYSICS SIMULATION & 60Hz REPLAY RECORDING
   // ---------------------------------------------------------------------------
   function stepSimulationTick(dt) {
+    if (onlineRole) {
+      const localRider = getLocalRider();
+      if (localRider) {
+        const riderInput =
+          !localRider.finished && !config.demo
+            ? input.getPlayerInput(0)
+            : computeAIInput(localRider, currentTrack, riders, config.difficulty);
+        stepRiderPhysics(localRider, riderInput, currentTrack, riders, dt, config.laps);
+        reportOnlineLapAndFinish(localRider);
+      }
+      rankRiders(riders);
+      replay.record(riders, dt);
+      return;
+    }
+
     for (let i = 0; i < riders.length; i++) {
       const r = riders[i];
       let riderInput;
@@ -744,6 +1573,11 @@ export function initGame() {
 
   function updateGamepadHaptics(nowMs) {
     if (gameState !== GAME_STATES.RACING) return;
+    if (onlineRole) {
+      const lr = getLocalRider();
+      if (lr) input.updateRiderRumble(0, lr, nowMs);
+      return;
+    }
     if (p1Rider) input.updateRiderRumble(0, p1Rider, nowMs);
     if (p2Rider) input.updateRiderRumble(1, p2Rider, nowMs);
   }
@@ -753,7 +1587,24 @@ export function initGame() {
     const allHumansFinished = humanRiders.length > 0 && humanRiders.every((r) => r.finished);
     const anyHumanFinished = humanRiders.some((r) => r.finished);
 
-    if (allHumansFinished) {
+    if (onlineRole === 'guest') {
+      if (allHumansFinished || (anyHumanFinished && onlineOpponentDisconnected)) {
+        postFinishTimer += dt;
+        if (postFinishTimer >= 2.8 && !onlineResultsPublished) {
+          onlineResultsPublished = true;
+          showRaceResults();
+        }
+      } else if (anyHumanFinished) {
+        postFinishTimer += dt;
+        if (postFinishTimer >= 21.5 && !onlineResultsPublished) {
+          onlineResultsPublished = true;
+          showRaceResults();
+        }
+      }
+      return;
+    }
+
+    if (allHumansFinished || (onlineRole && anyHumanFinished && onlineOpponentDisconnected)) {
       postFinishTimer += dt;
       if (postFinishTimer >= 1.1) {
         showRaceResults();
@@ -863,6 +1714,11 @@ export function initGame() {
   }
 
   function updateAllHud() {
+    if (onlineRole) {
+      const lr = getLocalRider();
+      if (lr) updatePlayerHud(0, lr);
+      return;
+    }
     if (p1Rider) updatePlayerHud(0, p1Rider);
     if (p2Rider) updatePlayerHud(1, p2Rider);
   }
@@ -965,11 +1821,48 @@ export function initGame() {
   // ---------------------------------------------------------------------------
   // POST-RACE PODIUM, STANDINGS & CHAMPIONSHIPPROGRESSION
   // ---------------------------------------------------------------------------
-  function showRaceResults() {
+  function showRaceResults(onlineStandingsOverride = null) {
     audio.silence();
 
-    const ranked = rankRiders([...riders]);
+    if (Array.isArray(onlineStandingsOverride)) {
+      for (const entry of onlineStandingsOverride) {
+        const target = riders.find((r) => r && r.id === entry.id);
+        if (target) {
+          target.position = entry.position;
+          target.finishPosition = entry.position;
+          target.finished = Boolean(entry.finished);
+          if (Number.isFinite(Number(entry.totalTime))) target.totalTime = Number(entry.totalTime);
+          if (entry.bestLapTime !== undefined) target.bestLapTime = entry.bestLapTime;
+          if (Number.isFinite(Number(entry.totalDistance))) target.totalDistance = Number(entry.totalDistance);
+        }
+      }
+    }
+
+    const ranked = Array.isArray(onlineStandingsOverride)
+      ? [...riders].sort((a, b) => (a.position || 99) - (b.position || 99))
+      : rankRiders([...riders]);
+
+    if (onlineRole === 'host' && !onlineStandingsOverride && !onlineResultsPublished && onlineSession) {
+      onlineResultsPublished = true;
+      const officialStandings = ranked.map((r, idx) => ({
+        id: r.id,
+        name: r.name,
+        bikeId: r.bike.id,
+        position: idx + 1,
+        finished: Boolean(r.finished),
+        totalTime: r.totalTime,
+        bestLapTime: r.bestLapTime,
+        totalDistance: r.totalDistance
+      }));
+      onlineSession.sendRaceEvent({ type: 'results', standings: officialStandings });
+    }
+
     const leaderTime = ranked[0] ? ranked[0].totalTime : 0;
+
+    const btnRaceAgain = document.getElementById('btn-race-again');
+    if (btnRaceAgain) {
+      btnRaceAgain.textContent = onlineRole ? 'Back to Online Lobby' : 'Race Again';
+    }
 
     const circuitBadge = document.getElementById('results-circuit-tag');
     if (circuitBadge) {
@@ -1198,7 +2091,9 @@ export function initGame() {
     }
 
     if (startBtn) {
-      if (config.mode === 'championship') {
+      if (config.mode === 'online-duel') {
+        startBtn.textContent = 'OPEN ONLINE LOBBY';
+      } else if (config.mode === 'championship') {
         if (canResume) {
           startBtn.textContent = `LAUNCH ROUND ${champState.currentRoundNumber}/3`;
         } else {
@@ -1361,6 +2256,9 @@ export function initGame() {
     if (config.mode === 'solo') {
       p2Title.textContent = 'LEAD AI RIVAL MACHINE';
       p2Sub.textContent = 'SOLO GP MODE — FULL SCREEN VIEWPORT';
+    } else if (config.mode === 'online-duel') {
+      p2Title.textContent = 'ONLINE OPPONENT MACHINE';
+      p2Sub.textContent = '1v1 OWNER-AUTHORITATIVE WEBRTC DUEL';
     } else if (config.mode === 'championship') {
       p2Title.textContent = 'PLAYER 2 MACHINE';
       p2Sub.textContent = '2P WORLD CHAMPIONSHIP CONTENDER';
@@ -1490,8 +2388,103 @@ export function initGame() {
   // Results Modal Buttons
   document.getElementById('btn-watch-replay')?.addEventListener('click', enterReplayMode);
   document.getElementById('btn-results-championship')?.addEventListener('click', showChampionshipStandings);
-  document.getElementById('btn-race-again')?.addEventListener('click', startRaceSession);
+  document.getElementById('btn-race-again')?.addEventListener('click', () => {
+    if (onlineRole) {
+      const nextTab = onlineRole === 'guest' ? 'join' : 'create';
+      teardownOnlineSession();
+      openOnlineLobby({ tab: nextTab });
+      return;
+    }
+    startRaceSession();
+  });
   document.getElementById('btn-back-paddock')?.addEventListener('click', returnToPaddock);
+
+  // Online Lobby Triggers & Modal Controls
+  document.getElementById('btn-nav-online')?.addEventListener('click', () => openOnlineLobby({ tab: 'create' }));
+  document.getElementById('btn-hero-online')?.addEventListener('click', () => openOnlineLobby({ tab: 'create' }));
+  document.getElementById('btn-paddock-online')?.addEventListener('click', () => openOnlineLobby({ tab: 'create' }));
+  onlineEls.btnClose?.addEventListener('click', closeOnlineLobby);
+  onlineEls.tabCreate?.addEventListener('click', () => setOnlineLobbyTab('create'));
+  onlineEls.tabJoin?.addEventListener('click', () => setOnlineLobbyTab('join'));
+
+  onlineEls.hostTrack?.addEventListener('change', (e) => {
+    onlineLobbyConfig.trackId = e.target.value;
+    setTrackSelection(onlineLobbyConfig.trackId);
+    sendOnlineLobbySync();
+    updateOnlineLobbyUi();
+  });
+  onlineEls.hostLaps?.addEventListener('change', (e) => {
+    onlineLobbyConfig.laps = Number(e.target.value) || 3;
+    config.laps = onlineLobbyConfig.laps;
+    syncSelectAndPills('select-laps', config.laps);
+    sendOnlineLobbySync();
+    updateOnlineLobbyUi();
+  });
+  onlineEls.hostBike?.addEventListener('change', (e) => {
+    onlineLobbyConfig.hostBikeId = getBikeById(e.target.value).id;
+    setBikeSelection(1, onlineLobbyConfig.hostBikeId);
+    sendOnlineLobbySync();
+    updateOnlineLobbyUi();
+  });
+  onlineEls.guestBike?.addEventListener('change', (e) => {
+    onlineLobbyConfig.guestBikeId = getBikeById(e.target.value).id;
+    setBikeSelection(2, onlineLobbyConfig.guestBikeId);
+    sendOnlineLobbySync();
+    updateOnlineLobbyUi();
+  });
+
+  onlineEls.btnCreate?.addEventListener('click', () => {
+    createOnlineRoom();
+  });
+
+  onlineEls.btnCopyLink?.addEventListener('click', async () => {
+    if (!onlineRoomCode) return;
+    const url = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(onlineRoomCode)}`;
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(url);
+      }
+    } catch (_err) {
+      // Clipboard may be restricted in non-HTTPS contexts
+    }
+    if (onlineEls.copyFeedback) {
+      onlineEls.copyFeedback.classList.remove('hidden');
+      setTimeout(() => onlineEls.copyFeedback?.classList.add('hidden'), 1800);
+    }
+  });
+
+  onlineEls.btnStart?.addEventListener('click', hostStartOnlineDuel);
+  onlineEls.btnJoin?.addEventListener('click', () => joinOnlineRoom());
+  onlineEls.joinCode?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      joinOnlineRoom();
+    }
+  });
+  onlineEls.btnReady?.addEventListener('click', toggleOnlineReady);
+  onlineEls.btnRetry?.addEventListener('click', () => {
+    onlineError = '';
+    if (onlineLastAttempt?.role === 'guest') {
+      joinOnlineRoom(onlineLastAttempt.code || onlineEls.joinCode?.value || '');
+    } else if (onlineLastAttempt?.role === 'host') {
+      createOnlineRoom();
+    } else {
+      updateOnlineLobbyUi();
+    }
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!onlineRole || !onlineSession) return;
+    if (gameState !== GAME_STATES.COUNTDOWN && gameState !== GAME_STATES.RACING) return;
+    if (document.hidden) {
+      audio.silence();
+      onlineSession.sendRaceEvent({ type: 'away' });
+    } else {
+      lastFrameTime = performance.now();
+      physicsAccumulator = 0;
+      onlineSession.sendRaceEvent({ type: 'back' });
+    }
+  });
 
   // Championship Paddock & Modal Buttons
   document.getElementById('btn-resume-championship')?.addEventListener('click', () => {
@@ -1599,6 +2592,9 @@ export function initGame() {
   if (urlCfg.autostart) {
     config.autostart = true;
   }
+  if (urlCfg.relay) {
+    onlineRelayOnly = true;
+  }
 
   // Initialize Paddock scene & circuit preview
   refreshChampionshipMenuBanner();
@@ -1612,8 +2608,8 @@ export function initGame() {
     setPlayerCameraMode(1, urlCfg.p2Camera);
   }
 
-  // Initialize 3D Showroom (deferred when autostart/replay) and Website Showcase controller
-  const immediateRaceBoot = Boolean(urlCfg.replay || urlCfg.autostart);
+  // Initialize 3D Showroom (deferred when autostart/replay/room invite) and Website Showcase controller
+  const immediateRaceBoot = Boolean(urlCfg.replay || urlCfg.autostart || urlCfg.room);
   if (!immediateRaceBoot) {
     ensureShowroom();
   }
@@ -1630,12 +2626,18 @@ export function initGame() {
     onToggleMute: handleMuteShortcut
   });
 
-  // Auto-launch race or replay if requested via URL parameters
+  // Auto-launch race, replay, or online invite room if requested via URL parameters
   if (urlCfg.replay) {
     startRaceSession();
     enterReplayMode();
   } else if (urlCfg.autostart) {
     startRaceSession();
+  } else if (urlCfg.room) {
+    viewMode = 'site';
+    if (siteNavbar) siteNavbar.classList.remove('hidden');
+    if (siteLanding) siteLanding.classList.remove('hidden');
+    openOnlineLobby({ tab: 'join', roomCode: urlCfg.room });
+    joinOnlineRoom(urlCfg.room);
   } else {
     applySiteModeClasses('site');
   }
@@ -1668,8 +2670,18 @@ export function initGame() {
     refreshGamepadBadges();
 
     if (gameState === GAME_STATES.COUNTDOWN) {
+      if (onlineRole) {
+        maybeSendLocalOnlineState(now);
+        updateRemoteProxyFromBuffer(now);
+        updateOnlineHudBadges();
+      }
       stepCountdown(rawDt);
-      renderer.renderFrame(riders, getEffectiveSplitMode(), rawDt);
+      renderer.renderFrame(
+        riders,
+        getEffectiveSplitMode(),
+        rawDt,
+        onlineRole ? { focusIndex: getLocalFocusIndex() } : undefined
+      );
       updateAllHud();
       drawMinimap(minimapCtx, minimapCanvas, currentTrack, riders);
     } else if (gameState === GAME_STATES.RACING) {
@@ -1680,21 +2692,42 @@ export function initGame() {
         }
       }
 
-      physicsAccumulator += rawDt;
-      // Cap substeps to prevent spiral of death on tab switch
-      let subSteps = 0;
-      while (physicsAccumulator >= FIXED_DT && subSteps < 10) {
-        stepSimulationTick(FIXED_DT);
-        physicsAccumulator -= FIXED_DT;
-        subSteps++;
-      }
+      if (onlineRole) {
+        updateRemoteProxyFromBuffer(now);
+        if (!document.hidden) {
+          physicsAccumulator += rawDt;
+          let subSteps = 0;
+          while (physicsAccumulator >= FIXED_DT && subSteps < 10) {
+            stepSimulationTick(FIXED_DT);
+            physicsAccumulator -= FIXED_DT;
+            subSteps++;
+          }
+          maybeSendLocalOnlineState(now);
+          updateGamepadHaptics(now);
+          audio.update(buildOnlineAudioRiders(), { splitMode: 'single' });
+        }
+        renderer.renderFrame(riders, 'single', rawDt, { focusIndex: getLocalFocusIndex() });
+        updateAllHud();
+        updateOnlineHudBadges();
+        drawMinimap(minimapCtx, minimapCanvas, currentTrack, riders);
+        checkRaceCompletion(rawDt);
+      } else {
+        physicsAccumulator += rawDt;
+        // Cap substeps to prevent spiral of death on tab switch
+        let subSteps = 0;
+        while (physicsAccumulator >= FIXED_DT && subSteps < 10) {
+          stepSimulationTick(FIXED_DT);
+          physicsAccumulator -= FIXED_DT;
+          subSteps++;
+        }
 
-      updateGamepadHaptics(now);
-      audio.update(riders, { splitMode: getEffectiveSplitMode() });
-      renderer.renderFrame(riders, getEffectiveSplitMode(), rawDt);
-      updateAllHud();
-      drawMinimap(minimapCtx, minimapCanvas, currentTrack, riders);
-      checkRaceCompletion(rawDt);
+        updateGamepadHaptics(now);
+        audio.update(riders, { splitMode: getEffectiveSplitMode() });
+        renderer.renderFrame(riders, getEffectiveSplitMode(), rawDt);
+        updateAllHud();
+        drawMinimap(minimapCtx, minimapCanvas, currentTrack, riders);
+        checkRaceCompletion(rawDt);
+      }
     } else if (gameState === GAME_STATES.REPLAY) {
       stepReplayFrame(rawDt);
     } else if (gameState === GAME_STATES.MENU && viewMode === 'paddock') {
@@ -1734,6 +2767,52 @@ export function initGame() {
     showChampionshipStandings,
     startReplay: enterReplayMode,
     stopReplay: exitReplayMode,
+    getOnlineState: () => ({
+      role: onlineRole,
+      localRiderIndex,
+      phase: onlinePhase,
+      code: onlineRoomCode,
+      transportType: onlineTransportType,
+      pingMs: onlinePingMs,
+      peerConnected: onlinePeerConnected,
+      guestReady: onlineGuestReady,
+      opponentAway: onlineOpponentAway,
+      opponentDisconnected: onlineOpponentDisconnected,
+      relayOnly: onlineRelayOnly,
+      bufferLength: opponentBuffer.length,
+      localRider: getLocalRider()
+        ? {
+            id: getLocalRider().id,
+            s: getLocalRider().s,
+            d: getLocalRider().d,
+            speed: getLocalRider().speed,
+            lap: getLocalRider().lap,
+            totalTime: getLocalRider().totalTime,
+            finished: getLocalRider().finished
+          }
+        : null,
+      remoteRider: getRemoteRider()
+        ? {
+            id: getRemoteRider().id,
+            s: getRemoteRider().s,
+            d: getRemoteRider().d,
+            speed: getRemoteRider().speed,
+            lap: getRemoteRider().lap,
+            totalTime: getRemoteRider().totalTime,
+            finished: getRemoteRider().finished
+          }
+        : null
+    }),
+    online: {
+      openLobby: openOnlineLobby,
+      closeLobby: closeOnlineLobby,
+      setTab: setOnlineLobbyTab,
+      createRoom: createOnlineRoom,
+      joinRoom: joinOnlineRoom,
+      toggleReady: toggleOnlineReady,
+      startDuel: hostStartOnlineDuel,
+      getSession: () => onlineSession
+    },
     stepFrames: (count = 1, dt = FIXED_DT) => {
       for (let i = 0; i < count; i++) {
         stepSimulationTick(dt);
