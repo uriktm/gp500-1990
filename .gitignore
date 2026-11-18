@@ -6,3 +6,6 @@ gp500-1990/dist/
 .env*.local
 .vercel
 node_modules/
+
+# Personal Claude Code permissions (machine-local)
+.claude/settings.local.json
