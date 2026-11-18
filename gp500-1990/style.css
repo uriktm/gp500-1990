@@ -3550,3 +3550,205 @@ html.site-scroll #race-canvas {
     font-size: 1.85rem;
   }
 }
+
+/* =====================================================================
+   TOUCH CONTROLS (phones / tablets) — html.touch-device is set by game.js
+   ===================================================================== */
+.touch-controls,
+.rotate-prompt {
+  display: none;
+}
+
+.touch-device .touch-hide {
+  display: none !important;
+}
+
+.touch-device #race-hud:not(.hidden) ~ .touch-controls {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.touch-steer-zone,
+.touch-pedal-zone {
+  position: absolute;
+  bottom: 0;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.touch-steer-zone {
+  left: 0;
+  top: 32%;
+  width: 46%;
+}
+
+.touch-pedal-zone {
+  right: 0;
+  width: 38%;
+  height: 64%;
+}
+
+.touch-steer-base {
+  position: absolute;
+  left: calc(110px + env(safe-area-inset-left, 0px));
+  top: calc(100% - 90px);
+  width: 150px;
+  height: 64px;
+  margin: -32px 0 0 -75px;
+  border-radius: 32px;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  background: rgba(8, 12, 20, 0.28);
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.touch-steer-base.active {
+  opacity: 1;
+}
+
+.touch-steer-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 54px;
+  height: 54px;
+  margin: -27px 0 0 -27px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffffff 0%, #c9d4e6 45%, #7d8aa3 100%);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+}
+
+.touch-hint {
+  position: absolute;
+  left: calc(26px + env(safe-area-inset-left, 0px));
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  font: 700 0.62rem/1 var(--font-mono, monospace);
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.55);
+  text-shadow: 0 1px 3px #000;
+}
+
+.touch-btn {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font: 800 0.9rem/1 var(--font-display, sans-serif);
+  letter-spacing: 0.08em;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  opacity: 0.78;
+  transition: transform 0.06s, opacity 0.06s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.touch-btn.pressed {
+  opacity: 1;
+  transform: scale(0.92);
+}
+
+.touch-gas {
+  right: calc(20px + env(safe-area-inset-right, 0px));
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+  width: 118px;
+  height: 118px;
+  background: radial-gradient(circle at 40% 35%, rgba(70, 220, 120, 0.85), rgba(14, 120, 52, 0.85));
+}
+
+.touch-brake {
+  right: calc(150px + env(safe-area-inset-right, 0px));
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  width: 92px;
+  height: 92px;
+  background: radial-gradient(circle at 40% 35%, rgba(255, 92, 92, 0.85), rgba(150, 18, 28, 0.85));
+}
+
+.touch-tuck {
+  right: calc(46px + env(safe-area-inset-right, 0px));
+  bottom: calc(158px + env(safe-area-inset-bottom, 0px));
+  width: 66px;
+  height: 66px;
+  padding: 0;
+  font-size: 0.7rem;
+  background: rgba(20, 28, 44, 0.75);
+}
+
+.touch-tuck.pressed {
+  background: rgba(255, 186, 8, 0.9);
+  color: #0b0f18;
+  text-shadow: none;
+  transform: none;
+}
+
+/* Compact race HUD so the thumbs and the road stay clear */
+.touch-device .hud-layer[data-split="single"] .hud-p1 {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+.touch-device .timing-chyron {
+  left: calc(10px + env(safe-area-inset-left, 0px));
+  top: 8px;
+  transform: scale(0.72);
+  transform-origin: top left;
+}
+
+.touch-device .status-badges-rack {
+  top: 92px;
+  left: calc(10px + env(safe-area-inset-left, 0px));
+  transform: scale(0.8);
+  transform-origin: top left;
+}
+
+.touch-device .hud-layer[data-split="single"] .minimap-dock {
+  top: 8px;
+  right: calc(10px + env(safe-area-inset-right, 0px));
+  transform: scale(0.55);
+  transform-origin: top right;
+}
+
+.touch-device .cockpit-cluster {
+  right: auto;
+  left: 50%;
+  bottom: calc(4px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%) scale(0.6);
+  transform-origin: bottom center;
+}
+
+@media (orientation: portrait) {
+  .touch-device #race-hud:not(.hidden) ~ .rotate-prompt {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: rgba(5, 8, 14, 0.94);
+    color: #fff;
+    font: 800 1rem/1.3 var(--font-display, sans-serif);
+    letter-spacing: 0.1em;
+    text-align: center;
+    padding: 24px;
+  }
+
+  .rotate-icon {
+    font-size: 4rem;
+    animation: rotate-hint 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes rotate-hint {
+  0%, 30% { transform: rotate(0deg); }
+  70%, 100% { transform: rotate(90deg); }
+}

@@ -21,7 +21,10 @@ function lerpAngle(a, b, t) {
 const VALID_CAMERA_MODES = ['chase', 'chase-far', 'helmet'];
 const SUN_OFFSET = new THREE.Vector3(-62, 82, 68);
 
-export function createRaceRenderer(canvas) {
+export function createRaceRenderer(canvas, opts = {}) {
+  // Phones: fewer pixels and a smaller shadow map keep the frame rate up and the device cool
+  const mobile = Boolean(opts.mobile);
+  const maxPixelRatio = mobile ? 1.5 : 2;
   let renderer = null;
   let hasWebGL = false;
 
@@ -47,7 +50,7 @@ export function createRaceRenderer(canvas) {
 
   if (renderer && hasWebGL) {
     renderer.setPixelRatio(
-      typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1
+      typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, maxPixelRatio) : 1
     );
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -97,7 +100,7 @@ export function createRaceRenderer(canvas) {
   sunLight.position.copy(SUN_OFFSET);
   sunLight.castShadow = true;
   if (sunLight.shadow) {
-    sunLight.shadow.mapSize.set(2048, 2048);
+    sunLight.shadow.mapSize.set(mobile ? 1024 : 2048, mobile ? 1024 : 2048);
     const shadowHalf = 70; // Tight 140m x 140m ortho shadow box for crisp bike/rider silhouettes
     sunLight.shadow.camera.left = -shadowHalf;
     sunLight.shadow.camera.right = shadowHalf;
@@ -1977,6 +1980,8 @@ export function createRaceRenderer(canvas) {
     renderer.setSize(width, height, false);
   }
 
+  const viewportSize = new THREE.Vector2();
+
   function renderFrame(riders = [], splitMode = currentSplitMode, dt = 1 / 60, options = {}) {
     if (splitMode && splitMode !== currentSplitMode) {
       currentSplitMode = splitMode;
@@ -1985,8 +1990,10 @@ export function createRaceRenderer(canvas) {
     syncRiders(riders, dt);
     updateParticles(dt);
 
-    const width = (canvas && canvas.width) || 1280;
-    const height = (canvas && canvas.height) || 720;
+    // Viewports are in CSS pixels; three.js multiplies them by the pixel ratio itself
+    const cssSize = typeof renderer.getSize === 'function' ? renderer.getSize(viewportSize) : null;
+    const width = (cssSize && cssSize.x) || (canvas && canvas.width) || 1280;
+    const height = (cssSize && cssSize.y) || (canvas && canvas.height) || 720;
 
     // Full-screen Trackside TV Broadcast Camera (used by Replay & TV mode)
     if (options && options.tv === true) {

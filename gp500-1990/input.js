@@ -78,6 +78,9 @@ export function createInputManager(callbacks = {}) {
   };
 
   // Previous gamepad button states for edge-triggered pause (btn 9) and camera cycle (btn 3 = Y)
+  // On-screen touch controls drive Player 1 only (see touch.js)
+  const touchState = { throttle: 0, brake: 0, steer: 0, tuck: false };
+
   const prevPadPause = [false, false];
   const prevPadCamera = [false, false];
   const lastRumbleTime = [0, 0];
@@ -349,10 +352,15 @@ export function createInputManager(callbacks = {}) {
 
     const pad = readGamepadInput(idx);
 
-    const throttle = clamp(Math.max(keyThrottle, pad.throttle), 0, 1);
-    const brake = clamp(Math.max(keyBrake, pad.brake), 0, 1);
-    const steer = Math.abs(keySteer) > 0 ? keySteer : clamp(pad.steer, -1, 1);
-    const tuck = Boolean(keyTuck || pad.tuck);
+    const touch = idx === 0 ? touchState : null;
+    const padSteer = clamp(pad.steer, -1, 1);
+    const touchSteer = touch ? clamp(touch.steer, -1, 1) : 0;
+
+    const throttle = clamp(Math.max(keyThrottle, pad.throttle, touch ? touch.throttle : 0), 0, 1);
+    const brake = clamp(Math.max(keyBrake, pad.brake, touch ? touch.brake : 0), 0, 1);
+    const analogSteer = Math.abs(touchSteer) > Math.abs(padSteer) ? touchSteer : padSteer;
+    const steer = Math.abs(keySteer) > 0 ? keySteer : analogSteer;
+    const tuck = Boolean(keyTuck || pad.tuck || (touch && touch.tuck));
 
     return { throttle, brake, steer, tuck };
   }
@@ -406,8 +414,16 @@ export function createInputManager(callbacks = {}) {
     }
   }
 
+  function setTouchState(next = {}) {
+    touchState.throttle = clamp(Number(next.throttle) || 0, 0, 1);
+    touchState.brake = clamp(Number(next.brake) || 0, 0, 1);
+    touchState.steer = clamp(Number(next.steer) || 0, -1, 1);
+    touchState.tuck = Boolean(next.tuck);
+  }
+
   function reset() {
     pressedKeys.clear();
+    setTouchState();
     pendingActions.toggleSplit = false;
     pendingActions.togglePause = false;
     pendingActions.toggleMute = false;
@@ -432,6 +448,7 @@ export function createInputManager(callbacks = {}) {
     consumeActions,
     setCallbacks,
     setKeyState,
+    setTouchState,
     isKeyDown: (code) => pressedKeys.has(code),
     reset,
     dispose

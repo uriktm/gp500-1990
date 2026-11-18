@@ -9,6 +9,7 @@ import {
 } from './physics.js';
 import { computeAIInput } from './ai.js';
 import { createInputManager } from './input.js';
+import { isTouchDevice, createTouchControls, enterLandscapeFullscreen } from './touch.js';
 import { createRaceRenderer } from './renderer.js';
 import { createAudioEngine } from './audio.js';
 import { createReplayRecorder } from './replay.js';
@@ -308,8 +309,13 @@ export function initGame() {
     }
   });
 
+  // Phones/tablets: one rider per screen, on-screen controls, lighter rendering
+  const touchMode = isTouchDevice();
+  if (touchMode) document.documentElement.classList.add('touch-device');
+  const portraitQuery = window.matchMedia('(orientation: portrait)');
+
   // Core subsystems
-  const renderer = createRaceRenderer(canvas);
+  const renderer = createRaceRenderer(canvas, { mobile: touchMode });
   const audio = createAudioEngine();
   const replay = createReplayRecorder();
   const championship = createChampionshipManager();
@@ -325,6 +331,9 @@ export function initGame() {
       }
     }
   });
+  const touch = touchMode
+    ? createTouchControls({ root: document.getElementById('touch-controls'), input })
+    : { reset() {} };
 
   // Cache HUD DOM elements for P1 and P2
   const hudElements = [1, 2].map((pNum) => ({
@@ -995,6 +1004,7 @@ export function initGame() {
 
     audio.init();
     input.reset();
+    touch.reset();
     physicsAccumulator = 0;
     postFinishTimer = 0;
 
@@ -1087,7 +1097,7 @@ export function initGame() {
   // SPLIT ORIENTATION, AUDIO & PAUSE CONTROLS
   // ---------------------------------------------------------------------------
   function getEffectiveSplitMode() {
-    if (config.mode === 'solo' || config.mode === 'online-duel' || onlineRole) return 'single';
+    if (touchMode || config.mode === 'solo' || config.mode === 'online-duel' || onlineRole) return 'single';
     return config.splitMode === 'vertical' ? 'vertical' : 'horizontal';
   }
 
@@ -1198,11 +1208,13 @@ export function initGame() {
       config.mode === 'duel' ||
       config.mode === 'online-duel'
     ) {
+      const p2IsAI = touchMode && !onlineRole;
       p2Rider = createRiderState({
         id: 'p2',
-        name: onlineRole ? `Guest (#${p2Bike.number})` : `Player 2 (#${p2Bike.number})`,
-        isAI: false,
-        playerIndex: 1,
+        name: onlineRole ? `Guest (#${p2Bike.number})` : p2IsAI ? `Rival (#${p2Bike.number})` : `Player 2 (#${p2Bike.number})`,
+        isAI: p2IsAI,
+        playerIndex: p2IsAI ? -1 : 1,
+        difficulty: config.difficulty,
         bike: p2Bike,
         s: 18.0,
         d: 2.2,
@@ -1399,10 +1411,53 @@ export function initGame() {
     if (opts.p1BikeId) {
       setBikeSelection(1, opts.p1BikeId);
     }
+    coerceModeForTouch();
     startRaceSession();
   }
 
+  // Local split-screen modes need two people at one screen; on a phone they become Solo GP
+  function coerceModeForTouch() {
+    if (touchMode && (config.mode === 'gp' || config.mode === 'duel')) {
+      config.mode = 'solo';
+      syncSelectAndPills('select-mode', 'solo');
+      updateP2GarageLabels();
+    }
+  }
+
+  function setupTouchPaddock() {
+    ['gp', 'duel'].forEach((mode) => {
+      document.querySelector(`#select-mode option[value="${mode}"]`)?.remove();
+      document.querySelector(`.Segmented-pills[data-for="select-mode"] [data-value="${mode}"]`)?.remove();
+    });
+    const champOption = document.querySelector('#select-mode option[value="championship"]');
+    if (champOption) champOption.textContent = 'Championship (3 Rounds)';
+    const champPill = document.querySelector('.Segmented-pills[data-for="select-mode"] [data-value="championship"]');
+    if (champPill) champPill.textContent = 'CHAMPIONSHIP';
+    document.getElementById('select-split')?.closest('.config-card')?.classList.add('touch-hide');
+    document.getElementById('btn-hud-split')?.classList.add('touch-hide');
+    document.getElementById('btn-pause-split')?.classList.add('touch-hide');
+    const paddockTitle = document.querySelector('.paddock-title');
+    if (paddockTitle) paddockTitle.textContent = "500cc GRAND PRIX '90";
+    document.getElementById('menu-pad1-status')?.classList.add('touch-hide');
+    document.getElementById('menu-pad2-status')?.classList.add('touch-hide');
+    const eyebrow = document.querySelector('.hero-eyebrow');
+    if (eyebrow) eyebrow.textContent = '1990 FIM 500cc WORLD CHAMPIONSHIP';
+    ['btn-nav-quickplay', 'btn-hero-quickplay', 'btn-footer-quickplay'].forEach((id) => {
+      const btn = document.getElementById(id);
+      if (btn) btn.textContent = 'QUICK RACE';
+    });
+
+    // Turning the phone upright mid-race pauses it behind the rotate prompt
+    portraitQuery.addEventListener('change', () => {
+      if (portraitQuery.matches && !onlineRole && gameState === GAME_STATES.RACING) {
+        handlePauseShortcut();
+      }
+    });
+  }
+
   function startRaceSession() {
+    coerceModeForTouch();
+    if (touchMode) enterLandscapeFullscreen();
     if (config.mode === 'online-duel' && !onlineRole) {
       openOnlineLobby({ tab: 'create' });
       return;
@@ -1425,6 +1480,7 @@ export function initGame() {
 
     audio.init();
     input.reset();
+    touch.reset();
     physicsAccumulator = 0;
     postFinishTimer = 0;
 
@@ -1493,7 +1549,8 @@ export function initGame() {
       }
       audio.update(buildOnlineAudioRiders(), { splitMode: 'single' });
     } else {
-      countdownTimer -= dt;
+      // The start lights wait while a phone is still held upright (rotate prompt is showing)
+      if (!(touchMode && portraitQuery.matches)) countdownTimer -= dt;
 
       // Allow human players (or AI in demo mode) to rev their 2-stroke engines on the start line
       const p1In = config.demo ? { throttle: 0.75 } : input.getPlayerInput(0);
@@ -2259,6 +2316,9 @@ export function initGame() {
     } else if (config.mode === 'online-duel') {
       p2Title.textContent = 'ONLINE OPPONENT MACHINE';
       p2Sub.textContent = '1v1 OWNER-AUTHORITATIVE WEBRTC DUEL';
+    } else if (config.mode === 'championship' && touchMode) {
+      p2Title.textContent = 'AI RIVAL MACHINE';
+      p2Sub.textContent = 'WORLD CHAMPIONSHIP CONTENDER';
     } else if (config.mode === 'championship') {
       p2Title.textContent = 'PLAYER 2 MACHINE';
       p2Sub.textContent = '2P WORLD CHAMPIONSHIP CONTENDER';
@@ -2594,6 +2654,11 @@ export function initGame() {
   }
   if (urlCfg.relay) {
     onlineRelayOnly = true;
+  }
+
+  if (touchMode) {
+    setupTouchPaddock();
+    coerceModeForTouch();
   }
 
   // Initialize Paddock scene & circuit preview

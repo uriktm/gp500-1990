@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>500cc GRAND PRIX '90 — TWO-STROKE WORLD CHAMPIONSHIP &amp; 2P SPLIT-SCREEN</title>
   <script>
     if (/[?&](autostart|replay)=(1|true)\b/i.test(window.location.search)) {
@@ -935,6 +935,24 @@
       </div>
     </div>
   </section>
+
+  <!-- Touch controls (phones/tablets only; shown while the race HUD is visible) -->
+  <div id="touch-controls" class="touch-controls" aria-hidden="true">
+    <div class="touch-steer-zone" data-touch-zone="steer">
+      <div class="touch-steer-base"><div class="touch-steer-knob"></div></div>
+      <span class="touch-hint touch-hint-steer">&#8592; DRAG TO LEAN &#8594;</span>
+    </div>
+    <div class="touch-pedal-zone" data-touch-zone="pedals">
+      <button type="button" class="touch-btn touch-tuck" data-touch="tuck">TUCK</button>
+      <div class="touch-btn touch-brake" data-touch="brake">BRAKE</div>
+      <div class="touch-btn touch-gas" data-touch="gas">GAS</div>
+    </div>
+  </div>
+
+  <div id="rotate-prompt" class="rotate-prompt" role="alert">
+    <div class="rotate-icon" aria-hidden="true">&#x21bb;</div>
+    <p>ROTATE YOUR PHONE TO LANDSCAPE</p>
+  </div>
 
   <!-- =====================================================================
        PAUSE OVERLAY
