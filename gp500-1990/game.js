@@ -95,6 +95,10 @@ function clamp(v, min, max) {
  * Parses URL query parameters for automated verification and quick launch hooks:
  * ?autostart=1&mode=gp|duel|solo|championship|online-duel&track=sakura|monterey|cathedral&split=horizontal|vertical&demo=1&room=XXXXX&relay=1
  */
+// Online 1v1 is switched off until its networking (TURN relay + room store) is set up:
+// the buttons stay visible but disabled.
+const ONLINE_ENABLED = false;
+
 export function parseUrlConfig(searchStr = typeof window !== 'undefined' && window.location ? window.location.search : '') {
   const params = new URLSearchParams(searchStr || '');
   const parsed = {
@@ -1046,6 +1050,7 @@ export function initGame() {
   }
 
   function openOnlineLobby(opts = {}) {
+    if (!ONLINE_ENABLED) return;
     audio.silence();
     if (opts.tab) {
       onlineLobbyTab = opts.tab === 'join' ? 'join' : 'create';
@@ -1411,16 +1416,41 @@ export function initGame() {
     if (opts.p1BikeId) {
       setBikeSelection(1, opts.p1BikeId);
     }
-    coerceModeForTouch();
+    coerceUnavailableMode();
     startRaceSession();
   }
 
-  // Local split-screen modes need two people at one screen; on a phone they become Solo GP
-  function coerceModeForTouch() {
-    if (touchMode && (config.mode === 'gp' || config.mode === 'duel')) {
+  // Local split-screen modes need two people at one screen (not on a phone), and online may be off:
+  // either way the race becomes Solo GP
+  function coerceUnavailableMode() {
+    const splitOnPhone = touchMode && (config.mode === 'gp' || config.mode === 'duel');
+    const onlineOff = !ONLINE_ENABLED && config.mode === 'online-duel';
+    if (splitOnPhone || onlineOff) {
       config.mode = 'solo';
       syncSelectAndPills('select-mode', 'solo');
       updateP2GarageLabels();
+    }
+  }
+
+  function disableOnlineEntryPoints() {
+    ['btn-nav-online', 'btn-hero-online', 'btn-paddock-online'].forEach((id) => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      btn.disabled = true;
+      btn.classList.add('coming-soon');
+      btn.title = 'Online play is coming soon';
+      btn.textContent = `${btn.textContent.trim()} · SOON`;
+    });
+    const option = document.querySelector('#select-mode option[value="online-duel"]');
+    if (option) {
+      option.disabled = true;
+      option.textContent = 'Online 1v1 Duel (coming soon)';
+    }
+    const pill = document.querySelector('.Segmented-pills[data-for="select-mode"] [data-value="online-duel"]');
+    if (pill) {
+      pill.disabled = true;
+      pill.classList.add('coming-soon');
+      pill.title = 'Online play is coming soon';
     }
   }
 
@@ -1456,7 +1486,7 @@ export function initGame() {
   }
 
   function startRaceSession() {
-    coerceModeForTouch();
+    coerceUnavailableMode();
     if (touchMode) enterLandscapeFullscreen();
     if (config.mode === 'online-duel' && !onlineRole) {
       openOnlineLobby({ tab: 'create' });
@@ -2656,10 +2686,9 @@ export function initGame() {
     onlineRelayOnly = true;
   }
 
-  if (touchMode) {
-    setupTouchPaddock();
-    coerceModeForTouch();
-  }
+  if (touchMode) setupTouchPaddock();
+  if (!ONLINE_ENABLED) disableOnlineEntryPoints();
+  coerceUnavailableMode();
 
   // Initialize Paddock scene & circuit preview
   refreshChampionshipMenuBanner();
@@ -2674,7 +2703,7 @@ export function initGame() {
   }
 
   // Initialize 3D Showroom (deferred when autostart/replay/room invite) and Website Showcase controller
-  const immediateRaceBoot = Boolean(urlCfg.replay || urlCfg.autostart || urlCfg.room);
+  const immediateRaceBoot = Boolean(urlCfg.replay || urlCfg.autostart || (ONLINE_ENABLED && urlCfg.room));
   if (!immediateRaceBoot) {
     ensureShowroom();
   }
@@ -2697,7 +2726,7 @@ export function initGame() {
     enterReplayMode();
   } else if (urlCfg.autostart) {
     startRaceSession();
-  } else if (urlCfg.room) {
+  } else if (ONLINE_ENABLED && urlCfg.room) {
     viewMode = 'site';
     if (siteNavbar) siteNavbar.classList.remove('hidden');
     if (siteLanding) siteLanding.classList.remove('hidden');

@@ -16,6 +16,24 @@ function clampVal(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
+// Recorded race-engine loops (cut from a real recording): idle, on-throttle and off-throttle.
+// Once loaded they replace the synthesized engine; the synth stays as the fallback.
+const ENGINE_SAMPLE_URLS = {
+  idle: './assets/audio/engine_idle.wav',
+  on: './assets/audio/engine_on.wav',
+  off: './assets/audio/engine_off.wav'
+};
+// Firing fundamental of each loop in Hz, measured from the recording
+const ENGINE_SAMPLE_F0 = { idle: 35, on: 48, off: 49 };
+// Engine pitch target: fundamental (Hz) = rpm * this; 4,200 rpm idles at the idle loop's own pitch
+const ENGINE_SAMPLE_HZ_PER_RPM = 0.47 / 60;
+const ENGINE_SAMPLE_MIX = 1.5;
+
+function smoothstep(edge0, edge1, x) {
+  const t = clampVal((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
 const BIKE_CRANK_PATTERN = {
   akagi: 0,  // V4 Screamer
   shiden: 1, // V4 Big-Bang twin-pulse
@@ -99,6 +117,9 @@ export function createAudioEngine() {
   let workletLoading = false;
   let gestureListenersBound = false;
 
+  let engineSamples = null; // { idle, on, off } AudioBuffers
+  let samplesLoading = false;
+
   const periodicWaves = [];
   const voices = [];
   let rivalVoice = null;
@@ -118,8 +139,88 @@ export function createAudioEngine() {
     window.addEventListener('keydown', resumeOnGesture, { passive: true });
   }
 
+  function decodeBuffer(arrayBuffer) {
+    return new Promise((resolve, reject) => {
+      const p = ctx.decodeAudioData(arrayBuffer, resolve, reject);
+      if (p && typeof p.then === 'function') p.then(resolve, reject);
+    });
+  }
+
+  function attachSamplesToVoice(voice) {
+    if (!ctx || !engineSamples || voice.sampleLayers) return;
+    const now = ctx.currentTime;
+
+    const sampleGain = ctx.createGain();
+    sampleGain.gain.value = 0.0001;
+    sampleGain.connect(voice.voiceBus);
+
+    // A little low-end body (the recording is thin below 200 Hz), then a throttle-driven lowpass
+    const body = ctx.createBiquadFilter();
+    body.type = 'lowshelf';
+    body.frequency.value = 200;
+    body.gain.value = 5;
+    const tone = ctx.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.frequency.value = 5000;
+    tone.Q.value = 0.6;
+    tone.connect(body);
+    body.connect(sampleGain);
+
+    const layers = {};
+    for (const key of ['idle', 'on', 'off']) {
+      const src = ctx.createBufferSource();
+      src.buffer = engineSamples[key];
+      src.loop = true;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.0001;
+      src.connect(gain);
+      gain.connect(tone);
+      // Random start offset so several bikes never phase-lock on the same loop
+      src.start(now, Math.random() * src.buffer.duration);
+      layers[key] = { src, gain };
+    }
+    voice.sampleLayers = layers;
+    voice.sampleTone = tone;
+    voice.sampleGain = sampleGain;
+
+    sampleGain.gain.setTargetAtTime(ENGINE_SAMPLE_MIX, now, 0.05);
+    voice.fallbackGain.gain.setTargetAtTime(0.0001, now, 0.05);
+    voice.workletGain.gain.setTargetAtTime(0.0001, now, 0.05);
+    if (voice.workletNode) {
+      const node = voice.workletNode;
+      voice.workletNode = null;
+      setTimeout(() => node.disconnect(), 300);
+    }
+  }
+
+  function loadEngineSamples() {
+    if (!ctx || engineSamples || samplesLoading || typeof fetch !== 'function') return;
+    samplesLoading = true;
+    Promise.all(
+      Object.entries(ENGINE_SAMPLE_URLS).map(([key, url]) =>
+        fetch(url)
+          .then((r) => {
+            if (!r.ok) throw new Error(`${url} ${r.status}`);
+            return r.arrayBuffer();
+          })
+          .then(decodeBuffer)
+          .then((buf) => [key, buf])
+      )
+    )
+      .then((entries) => {
+        if (!ctx) return;
+        engineSamples = Object.fromEntries(entries);
+        for (const v of voices) attachSamplesToVoice(v);
+        if (rivalVoice) attachSamplesToVoice(rivalVoice);
+      })
+      .catch((err) => {
+        samplesLoading = false;
+        console.warn('[audio] engine samples unavailable, using synthesized engine', err);
+      });
+  }
+
   function attachWorkletToVoice(voice) {
-    if (!ctx || !workletReady || voice.workletNode) return;
+    if (!ctx || !workletReady || voice.workletNode || voice.sampleLayers) return;
     try {
       const node = new AudioWorkletNode(ctx, 'two-stroke-v4-processor', {
         numberOfInputs: 0,
@@ -204,6 +305,7 @@ export function createAudioEngine() {
 
       ready = true;
       bindGestureResume();
+      loadEngineSamples();
       loadAudioWorklet();
       return true;
     } catch (_e) {
@@ -283,6 +385,9 @@ export function createAudioEngine() {
       workletGain,
       fallbackGain,
       workletNode: null,
+      sampleLayers: null,
+      sampleTone: null,
+      sampleGain: null,
       primaryOsc,
       crankSubOsc,
       pipeFilter,
@@ -542,8 +647,33 @@ export function createAudioEngine() {
       p.get('dopplerRatio')?.setValueAtTime(dopplerRatio, now);
     }
 
+    // 1b. Recorded engine loops: pitch follows rpm, idle/on/off layers blend by rpm and throttle
+    if (voice.sampleLayers) {
+      const f0 = rpm * ENGINE_SAMPLE_HZ_PER_RPM * ((timbre.baseFreq || 110) / 110) * dopplerRatio;
+      const L = voice.sampleLayers;
+      L.idle.src.playbackRate.setTargetAtTime(clampVal(f0 / ENGINE_SAMPLE_F0.idle, 0.5, 2.2), now, 0.03);
+      L.on.src.playbackRate.setTargetAtTime(clampVal(f0 / ENGINE_SAMPLE_F0.on, 0.5, 2.8), now, 0.03);
+      L.off.src.playbackRate.setTargetAtTime(clampVal(f0 / ENGINE_SAMPLE_F0.off, 0.5, 2.8), now, 0.03);
+
+      const revved = smoothstep(4800, 7400, rpm);
+      const load = smoothstep(0.05, 0.6, throttle);
+      L.idle.gain.gain.setTargetAtTime(Math.cos(revved * Math.PI / 2), now, 0.06);
+      L.on.gain.gain.setTargetAtTime(Math.sin(revved * Math.PI / 2) * Math.sin(load * Math.PI / 2), now, 0.05);
+      L.off.gain.gain.setTargetAtTime(Math.sin(revved * Math.PI / 2) * Math.cos(load * Math.PI / 2) * 0.8, now, 0.08);
+
+      const toneHz = clampVal((1600 + throttle * 4200 + rpmNorm * 3000) * dopplerRatio, 900, 9000);
+      voice.sampleTone.frequency.setTargetAtTime(toneHz, now, 0.04);
+
+      if (voice.withRoadEffects && throttle < 0.08 && rpm > 6800 && now - voice.lastOverrunPopAt > 0.08) {
+        if (Math.random() < 0.3) {
+          triggerOverrunPop(voice, rpmNorm);
+          voice.lastOverrunPopAt = now;
+        }
+      }
+    }
+
     // 2. Update PeriodicWave fallback path (still active if worklet unavailable)
-    if (!voice.workletNode || voice.fallbackGain.gain.value > 0.01) {
+    if (!voice.sampleLayers && (!voice.workletNode || voice.fallbackGain.gain.value > 0.01)) {
       if (patternIdx !== voice.lastPatternIdx && periodicWaves[patternIdx]) {
         voice.primaryOsc.setPeriodicWave(periodicWaves[patternIdx]);
         voice.lastPatternIdx = patternIdx;
@@ -774,6 +904,8 @@ export function createAudioEngine() {
     }
     ctx = null;
     ready = false;
+    engineSamples = null;
+    samplesLoading = false;
     workletReady = false;
     workletLoading = false;
     voices.length = 0;
@@ -797,6 +929,7 @@ export function createAudioEngine() {
     getDebugState: () => ({
       ready,
       workletReady,
+      samplesReady: Boolean(engineSamples),
       muted,
       voiceCount: voices.length,
       hasRivalVoice: Boolean(rivalVoice)

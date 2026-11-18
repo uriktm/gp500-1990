@@ -3752,3 +3752,13 @@ html.site-scroll #race-canvas {
   0%, 30% { transform: rotate(0deg); }
   70%, 100% { transform: rotate(90deg); }
 }
+
+/* Online play switched off for now (ONLINE_ENABLED in game.js): visible but not clickable */
+button.coming-soon,
+button.coming-soon:hover {
+  opacity: 0.42;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+  transform: none;
+  box-shadow: none;
+}
