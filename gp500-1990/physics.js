@@ -109,7 +109,8 @@ function computeGearAndRpm(rider, throttle, dt) {
   rider.rpm = getRpmForGear(rider.gear, rider.speed);
 
   if (rider.shiftTimer <= 0) {
-    if (rider.gear < 6 && rider.rpm >= 12800) {
+    // Shift just before the pipe falls off its peak (12,500): above it the bike can stall at the redline and never reach 6th
+    if (rider.gear < 6 && rider.rpm >= 12300) {
       rider.gear += 1;
       rider.shiftTimer = 0.065;
       rider.rpm = getRpmForGear(rider.gear, rider.speed);
