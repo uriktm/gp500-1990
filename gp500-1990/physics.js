@@ -61,6 +61,7 @@ export function createRiderState(opts = {}) {
     steer: 0,
     tuck: false,
     rearSlip: opts.rearSlip ?? 0,
+    tractionControl: opts.tractionControl ?? true,
     highsideTimer: opts.highsideTimer ?? 0,
     wheelieAngle: opts.wheelieAngle ?? 0,
     slipstreamBoost: opts.slipstreamBoost ?? 0,
@@ -145,7 +146,11 @@ export function stepRiderPhysics(rider, input = {}, track, allRiders = [], dt = 
     rider.highsideTimer = Math.max(0, rider.highsideTimer - dt);
   }
 
-  const throttle = inHighside ? 0 : rawThrottle;
+  // Traction control: keyboard and touch always ask for full lean and full throttle, which
+  // would highside in every long corner. Feather the throttle as the rear steps out so the
+  // slide settles into a controlled powerslide below the highside point.
+  const tcCut = rider.tractionControl === false ? 0 : clamp((rider.rearSlip - 0.45) / 0.3, 0, 1);
+  const throttle = inHighside ? 0 : rawThrottle * (1 - 0.35 * tcCut);
   const brake = inHighside ? 0.35 : rawBrake;
   const steer = inHighside ? 0 : rawSteer;
   const tuck = !inHighside && rawTuck && Math.abs(rider.lean) < 0.42;

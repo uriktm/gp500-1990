@@ -369,7 +369,7 @@ async function main() {
 
   await runTest('Simcade mechanics: rearSlip powerslide buildup, highsideTimer trigger, wheelieAngle, and slipstreamBoost', () => {
     // 1. Rear slip buildup & highside trigger when leaning hard at full throttle in powerband
-    const slideRider = createRiderState({ id: 'slide', bike: BIKES[1], s: 100, d: 0 });
+    const slideRider = createRiderState({ id: 'slide', bike: BIKES[1], s: 100, d: 0, tractionControl: false });
     slideRider.speed = 42;
     slideRider.gear = 2;
     slideRider.rpm = 10800;
@@ -390,6 +390,20 @@ async function main() {
     }
     assert.ok(maxSlip > 0.25, `Expected rearSlip buildup at full lean + powerband throttle, got maxSlip=${maxSlip}`);
     assert.ok(highsideTriggered, `Expected highsideTimer > 0 when sustained extreme lean + full throttle pushes rearSlip >= 1.0`);
+
+    // 1b. Traction control (default): keyboard full lean + full throttle powerslides but never highsides
+    const tcRider = createRiderState({ id: 'tc', bike: BIKES[1], s: 100, d: 0 });
+    let tcMaxSlip = 0;
+    for (let i = 0; i < 600; i++) {
+      tcRider.lean = MAX_LEAN_RAD * 0.95;
+      tcRider.rpm = 11000;
+      tcRider.speed = 42;
+      tcRider.d = 0;
+      stepRiderPhysics(tcRider, { throttle: 1, brake: 0, steer: 1, tuck: false }, sakura, [tcRider], FIXED_DT, 3);
+      tcMaxSlip = Math.max(tcMaxSlip, tcRider.rearSlip);
+      assert.equal(tcRider.highsideTimer, 0, `Traction control should prevent the highside (step ${i}, slip ${tcRider.rearSlip.toFixed(2)})`);
+    }
+    assert.ok(tcMaxSlip > 0.4 && tcMaxSlip < 0.9, `Expected a controlled powerslide under traction control, got maxSlip=${tcMaxSlip.toFixed(2)}`);
 
     // 2. Wheelie angle in low gears under hard acceleration
     const wheelieRider = createRiderState({ id: 'wheelie', bike: BIKES[1], s: 10, d: 0 });
