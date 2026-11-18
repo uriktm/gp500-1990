@@ -22,6 +22,7 @@ export const MIME_TYPES = {
   '.jpeg': 'image/jpeg',
   '.gif': 'image/gif',
   '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2'
 };
@@ -58,12 +59,6 @@ export function createServer(rootDir = ROOT_DIR, options = {}) {
       if (method !== 'GET' && method !== 'HEAD') {
         res.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('405 Method Not Allowed');
-        return;
-      }
-
-      if (cleanUrl === '/favicon.ico') {
-        res.writeHead(204);
-        res.end();
         return;
       }
 
