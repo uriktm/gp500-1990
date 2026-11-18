@@ -55,6 +55,17 @@ const AI_ROSTER = [
   { name: 'L. Bianchi #55', bikeId: 'corsa', lineOffset: 0.0 }
 ];
 
+function makeEl(tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  if (text !== undefined && text !== null) el.textContent = String(text);
+  return el;
+}
+
+function appendCells(tr, values) {
+  values.forEach((value) => tr.appendChild(makeEl('td', '', value)));
+}
+
 export function formatLapTime(seconds) {
   if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) {
     return '--:--.---';
@@ -98,6 +109,11 @@ function clamp(v, min, max) {
 // Online 1v1 is switched off until its networking (TURN relay + room store) is set up:
 // the buttons stay visible but disabled.
 const ONLINE_ENABLED = false;
+
+function clampLaps(raw) {
+  const laps = Math.round(Number(raw));
+  return Number.isFinite(laps) ? Math.min(20, Math.max(1, laps)) : 3;
+}
 
 export function parseUrlConfig(searchStr = typeof window !== 'undefined' && window.location ? window.location.search : '') {
   const params = new URLSearchParams(searchStr || '');
@@ -778,7 +794,7 @@ export function initGame() {
 
     if (msg.type === 'start' && onlineRole === 'guest') {
       if (msg.trackId) onlineLobbyConfig.trackId = msg.trackId;
-      if (msg.laps) onlineLobbyConfig.laps = Number(msg.laps) || 3;
+      if (msg.laps) onlineLobbyConfig.laps = clampLaps(msg.laps);
       if (msg.hostBikeId) onlineLobbyConfig.hostBikeId = getBikeById(msg.hostBikeId).id;
       if (msg.guestBikeId) onlineLobbyConfig.guestBikeId = getBikeById(msg.guestBikeId).id;
 
@@ -808,7 +824,7 @@ export function initGame() {
     }
 
     if (msg.type === 'lap' && remoteRider) {
-      remoteRider.lap = Math.max(remoteRider.lap || 1, Number(msg.lap) || 1);
+      remoteRider.lap = Math.max(remoteRider.lap || 1, Math.min(config.laps + 1, Number(msg.lap) || 1));
       if (msg.lastLapTime != null) remoteRider.lastLapTime = msg.lastLapTime;
       if (msg.bestLapTime != null) remoteRider.bestLapTime = msg.bestLapTime;
       return;
@@ -870,7 +886,7 @@ export function initGame() {
         }
         if (st.hostMeta && typeof st.hostMeta === 'object') {
           if (st.hostMeta.trackId) onlineLobbyConfig.trackId = st.hostMeta.trackId;
-          if (st.hostMeta.laps) onlineLobbyConfig.laps = Number(st.hostMeta.laps) || 3;
+          if (st.hostMeta.laps) onlineLobbyConfig.laps = clampLaps(st.hostMeta.laps);
           if (st.hostMeta.hostBikeId) onlineLobbyConfig.hostBikeId = getBikeById(st.hostMeta.hostBikeId).id;
         }
         if (st.phase === 'connected') {
@@ -907,7 +923,7 @@ export function initGame() {
             onlineLobbyConfig.trackId = msg.trackId;
           }
           if (msg.laps) {
-            onlineLobbyConfig.laps = Number(msg.laps) || 3;
+            onlineLobbyConfig.laps = clampLaps(msg.laps);
           }
           if (msg.hostBikeId) {
             onlineLobbyConfig.hostBikeId = getBikeById(msg.hostBikeId).id;
@@ -2004,12 +2020,12 @@ export function initGame() {
       top3.forEach((r, idx) => {
         const card = document.createElement('div');
         card.className = `podium-box pos-${idx + 1}`;
-        card.innerHTML = `
-          <span class="podium-place">${formatOrdinal(idx + 1)} PLACE</span>
-          <div class="podium-rider">${r.name}</div>
-          <div class="podium-bike">${r.bike.name} · ${r.bike.team}</div>
-          <div class="podium-bike">BEST: ${formatLapTime(r.bestLapTime)}</div>
-        `;
+        card.append(
+          makeEl('span', 'podium-place', `${formatOrdinal(idx + 1)} PLACE`),
+          makeEl('div', 'podium-rider', r.name),
+          makeEl('div', 'podium-bike', `${r.bike.name} · ${r.bike.team}`),
+          makeEl('div', 'podium-bike', `BEST: ${formatLapTime(r.bestLapTime)}`)
+        );
         podiumContainer.appendChild(card);
       });
     }
@@ -2034,14 +2050,14 @@ export function initGame() {
         }
 
         const lapsDone = r.finished ? config.laps : Math.max(0, r.lap - 1);
-        tr.innerHTML = `
-          <td>${formatOrdinal(idx + 1)}</td>
-          <td>${r.name}</td>
-          <td>${r.bike.name} #${r.bike.number}</td>
-          <td>${lapsDone}/${config.laps}</td>
-          <td>${timeCol}</td>
-          <td>${formatLapTime(r.bestLapTime)}</td>
-        `;
+        appendCells(tr, [
+          formatOrdinal(idx + 1),
+          r.name,
+          `${r.bike.name} #${r.bike.number}`,
+          `${lapsDone}/${config.laps}`,
+          timeCol,
+          formatLapTime(r.bestLapTime)
+        ]);
         tbody.appendChild(tr);
       });
     }
@@ -2111,11 +2127,11 @@ export function initGame() {
         const placeLabel = completed && idx === 0
           ? '1990 WORLD CHAMPION'
           : `${formatOrdinal(idx + 1)} OVERALL`;
-        card.innerHTML = `
-          <span class="podium-place">${placeLabel}</span>
-          <div class="podium-rider">${entry.name}</div>
-          <div class="podium-bike">${entry.bike?.name || ''} · ${entry.points} PTS (${entry.wins || 0} WINS)</div>
-        `;
+        card.append(
+          makeEl('span', 'podium-place', placeLabel),
+          makeEl('div', 'podium-rider', entry.name),
+          makeEl('div', 'podium-bike', `${entry.bike?.name || ''} · ${entry.points} PTS (${entry.wins || 0} WINS)`)
+        );
         podiumEl.appendChild(card);
       });
     }
@@ -2135,16 +2151,18 @@ export function initGame() {
           return `${val} pts (${formatOrdinal(pos)})`;
         };
 
-        tr.innerHTML = `
-          <td>${formatOrdinal(idx + 1)}</td>
-          <td>${entry.name}</td>
-          <td>${entry.bike?.name || ''} #${entry.bike?.number || ''}</td>
-          <td>${fmtRound(0)}</td>
-          <td>${fmtRound(1)}</td>
-          <td>${fmtRound(2)}</td>
-          <td>${entry.wins || 0}</td>
-          <td><strong>${entry.points} PTS</strong></td>
-        `;
+        appendCells(tr, [
+          formatOrdinal(idx + 1),
+          entry.name,
+          `${entry.bike?.name || ''} #${entry.bike?.number || ''}`,
+          fmtRound(0),
+          fmtRound(1),
+          fmtRound(2),
+          entry.wins || 0
+        ]);
+        const pointsCell = makeEl('td');
+        pointsCell.appendChild(makeEl('strong', '', `${entry.points} PTS`));
+        tr.appendChild(pointsCell);
         tbodyEl.appendChild(tr);
       });
     }

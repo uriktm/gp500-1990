@@ -15,8 +15,6 @@ import { startServer } from '../server.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DEFAULT_OUTPUT_DIR = 'C:\\Users\\urikt\\.gemini\\antigravity\\brain\\9bad8496-f03f-45ed-8035-6adebb866989\\scratch\\shots';
-const LOCAL_FALLBACK_DIR = 'C:\\Users\\urikt\\.gemini\\antigravity\\brain\\290a2be5-0272-4699-ae1a-0a6531a19e63\\scratch\\shots';
 
 function resolveOutputDir() {
   if (process.env.SHOTS_DIR) {
@@ -24,8 +22,6 @@ function resolveOutputDir() {
     return process.env.SHOTS_DIR;
   }
   const candidates = [
-    DEFAULT_OUTPUT_DIR,
-    LOCAL_FALLBACK_DIR,
     path.join(os.tmpdir(), 'gp500-1990-shots'),
   ];
   for (const dir of candidates) {

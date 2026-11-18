@@ -141,7 +141,9 @@ const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve
 if (isMain) {
   const defaultPort = Number(process.env.PORT) || 8090;
   const server = createServer();
-  server.listen(defaultPort, () => {
-    console.log(`500cc Grand Prix '90 HTTP Server running at http://localhost:${defaultPort}/`);
+  // Localhost only by default; set HOST=0.0.0.0 to test from a phone on the same Wi-Fi
+  const host = process.env.HOST || '127.0.0.1';
+  server.listen(defaultPort, host, () => {
+    console.log(`500cc Grand Prix '90 HTTP Server running at http://${host === '127.0.0.1' ? 'localhost' : host}:${defaultPort}/`);
   });
 }

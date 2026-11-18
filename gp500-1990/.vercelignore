@@ -1,0 +1,6 @@
+# Development-only files: keep them out of the public site (the game itself only needs the browser assets and api/)
+/server.js
+/test_gp500.js
+/PLAN.md
+/tools
+/dist

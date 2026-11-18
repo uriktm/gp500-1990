@@ -7,8 +7,9 @@
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_CODE_LENGTH = 5;
 const ROOM_TTL_SECONDS = 600;
-const RATE_LIMIT_MAX = 20;
 const RATE_LIMIT_WINDOW_SECONDS = 3600;
+// Requests per IP per hour, per action. `ice` hands out TURN credentials, so it is the one worth abusing.
+const RATE_LIMITS = { create: 20, ice: 30, read: 240, answer: 30 };
 const TURN_TTL_SECONDS = 3600;
 const TURN_CACHE_MS = 60_000;
 const MAX_BODY_BYTES = 262_144; // 256 KB
@@ -206,10 +207,10 @@ function createMemoryStorage(map, nowFn) {
   }
 
   return {
-    async incrRateLimit(ip, windowSec) {
+    async incrRateLimit(bucket, ip, windowSec) {
       const nowMs = nowFn();
       sweepExpired(nowMs);
-      const key = `rl:${ip}`;
+      const key = `rl:${bucket}:${ip}`;
       const existing = pruneIfExpired(key, nowMs);
       if (!existing) {
         map.set(key, { count: 1, expiresAt: nowMs + windowSec * 1000 });
@@ -274,8 +275,8 @@ function createUpstashStorage(restUrl, restToken, fetchFn, nowFn) {
   }
 
   return {
-    async incrRateLimit(ip, windowSec) {
-      const rlKey = `gp500:rl:${ip}`;
+    async incrRateLimit(bucket, ip, windowSec) {
+      const rlKey = `gp500:rl:${bucket}:${ip}`;
       const count = Number(await redisCmd(['INCR', rlKey]));
       if (count === 1) {
         await redisCmd(['EXPIRE', rlKey, String(windowSec)]);
@@ -296,35 +297,33 @@ function createUpstashStorage(restUrl, restToken, fetchFn, nowFn) {
     },
 
     async getRoom(code) {
-      const raw = await redisCmd(['GET', `gp500:room:${code}`]);
-      if (!raw) return null;
-      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const [rawRoom, rawAnswer] = (await redisCmd(['MGET', `gp500:room:${code}`, `gp500:answer:${code}`])) || [];
+      if (!rawRoom) return null;
+      const room = typeof rawRoom === 'string' ? JSON.parse(rawRoom) : rawRoom;
+      if (rawAnswer) {
+        const ans = typeof rawAnswer === 'string' ? JSON.parse(rawAnswer) : rawAnswer;
+        room.answer = ans.answer;
+        room.guestMeta = ans.guestMeta ?? null;
+      }
+      return room;
     },
 
     async answerRoom(code, answer, guestMeta) {
-      const key = `gp500:room:${code}`;
-      const raw = await redisCmd(['GET', key]);
+      const raw = await redisCmd(['GET', `gp500:room:${code}`]);
       if (!raw) return 'not_found';
       const room = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (room.answer !== null && room.answer !== undefined) {
-        return 'conflict';
-      }
-      const updated = {
-        ...room,
-        answer,
-        guestMeta: guestMeta ?? null,
-      };
       const elapsedSec = Math.max(0, Math.floor((nowFn() - (room.createdAt || nowFn())) / 1000));
       const remainingSec = Math.max(1, ROOM_TTL_SECONDS - elapsedSec);
+      // SET NX is atomic: the first guest wins, any other guest gets 'conflict'
       const setRes = await redisCmd([
         'SET',
-        key,
-        JSON.stringify(updated),
+        `gp500:answer:${code}`,
+        JSON.stringify({ answer, guestMeta: guestMeta ?? null }),
         'EX',
         String(remainingSec),
-        'XX',
+        'NX',
       ]);
-      return setRes === 'OK' ? 'ok' : 'not_found';
+      return setRes === 'OK' ? 'ok' : 'conflict';
     },
   };
 }
@@ -429,6 +428,19 @@ export function createRoomHandler(options = {}) {
     return servers;
   }
 
+  // Returns true (and answers 429) when this IP has used up its hourly allowance for the action
+  async function rateLimited(storage, bucket, req, res) {
+    const count = await storage.incrRateLimit(bucket, getClientIp(req), RATE_LIMIT_WINDOW_SECONDS);
+    if (count <= RATE_LIMITS[bucket]) return false;
+    sendJson(
+      res,
+      429,
+      { error: `Rate limit exceeded. Maximum ${RATE_LIMITS[bucket]} ${bucket} requests per hour per IP.` },
+      { 'Retry-After': String(RATE_LIMIT_WINDOW_SECONDS) }
+    );
+    return true;
+  }
+
   return async function roomHandler(req, res) {
     try {
       const method = String(req?.method || 'GET').toUpperCase();
@@ -459,6 +471,7 @@ export function createRoomHandler(options = {}) {
       if (method === 'GET') {
         const action = String(query.action || '').trim().toLowerCase();
         if (action === 'ice') {
+          if (await rateLimited(storage, 'ice', req, res)) return;
           const iceServers = await getIceServers();
           sendJson(res, 200, { iceServers });
           return;
@@ -473,10 +486,11 @@ export function createRoomHandler(options = {}) {
           sendJson(res, 400, { error: 'Missing query parameter: expected action=ice or code=XXXXX' });
           return;
         }
-        if (!/^[A-Z0-9_-]{1,32}$/.test(code)) {
+        if (!/^[A-Z0-9]{5,12}$/.test(code)) {
           sendJson(res, 404, { error: 'Room not found or expired' });
           return;
         }
+        if (await rateLimited(storage, 'read', req, res)) return;
 
         const room = await storage.getRoom(code);
         if (!room) {
@@ -515,22 +529,13 @@ export function createRoomHandler(options = {}) {
         const requestedCode = body.code !== undefined && body.code !== null
           ? normalizeCode(body.code)
           : '';
-        if (requestedCode && !/^[A-Z0-9]{4,12}$/.test(requestedCode)) {
+        // Short custom codes are guessable; generated codes are 5 characters
+        if (requestedCode && !/^[A-Z0-9]{6,12}$/.test(requestedCode)) {
           sendJson(res, 400, { error: 'Invalid requested room code format' });
           return;
         }
 
-        const clientIp = getClientIp(req);
-        const count = await storage.incrRateLimit(clientIp, RATE_LIMIT_WINDOW_SECONDS);
-        if (count > RATE_LIMIT_MAX) {
-          sendJson(
-            res,
-            429,
-            { error: 'Rate limit exceeded. Maximum 20 rooms per hour per IP.' },
-            { 'Retry-After': String(RATE_LIMIT_WINDOW_SECONDS) }
-          );
-          return;
-        }
+        if (await rateLimited(storage, 'create', req, res)) return;
 
         const record = {
           offer,
@@ -568,10 +573,11 @@ export function createRoomHandler(options = {}) {
           sendJson(res, 400, { error: 'Missing room code' });
           return;
         }
-        if (!/^[A-Z0-9_-]{1,32}$/.test(code)) {
+        if (!/^[A-Z0-9]{5,12}$/.test(code)) {
           sendJson(res, 404, { error: 'Room not found or expired' });
           return;
         }
+        if (await rateLimited(storage, 'answer', req, res)) return;
 
         const answer = body.answer;
         if (!answer || (typeof answer !== 'object' && typeof answer !== 'string')) {
@@ -607,6 +613,24 @@ export function createRoomHandler(options = {}) {
 
 const defaultHandler = createRoomHandler();
 
+/**
+ * The deployed endpoint stays closed until online play is switched on (GP500_ONLINE=1 in Vercel),
+ * and it needs Upstash: each serverless instance has its own memory, so rooms and rate limits
+ * kept there would not be shared. The local dev server (server.js) uses createRoomHandler directly.
+ */
 export default async function handler(req, res) {
+  const env = process.env;
+  if (String(env.GP500_ONLINE || '').trim() !== '1') {
+    sendJson(res, 503, { error: 'Online play is currently disabled' });
+    return;
+  }
+  const hasSharedStore = Boolean(
+    String(env.KV_REST_API_URL || env.UPSTASH_REDIS_REST_URL || '').trim() &&
+    String(env.KV_REST_API_TOKEN || env.UPSTASH_REDIS_REST_TOKEN || '').trim()
+  );
+  if (!hasSharedStore) {
+    sendJson(res, 503, { error: 'Online play is not configured (missing Upstash Redis)' });
+    return;
+  }
   return defaultHandler(req, res);
 }

@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { registerHooks } from 'node:module';
@@ -1772,6 +1773,112 @@ async function main() {
       turnIceRes.json.iceServers.some((s) => JSON.stringify(s.urls).includes('turn:turn.cloudflare.com')),
       'Expected TURN server entry when TURN_KEY_ID & TURN_API_TOKEN are set'
     );
+  });
+
+  await runTest('/api/room security: closed by default, per-action rate limits, no short custom codes, atomic Upstash join', async () => {
+    const roomMod = await import('./api/room.js');
+    const { createRoomHandler } = roomMod;
+    const offer = { type: 'offer', sdp: 'v=0\r\n' };
+
+    // 1. Deployed handler answers 503 until GP500_ONLINE=1 and Upstash are both configured
+    const savedEnv = { ...process.env };
+    try {
+      delete process.env.GP500_ONLINE;
+      let r = await invokeMockRoomReq(roomMod.default, { url: '/api/room?action=ice', query: { action: 'ice' } });
+      assert.equal(r.statusCode, 503, 'API must be closed while online play is off');
+      process.env.GP500_ONLINE = '1';
+      delete process.env.KV_REST_API_URL;
+      delete process.env.KV_REST_API_TOKEN;
+      delete process.env.UPSTASH_REDIS_REST_URL;
+      delete process.env.UPSTASH_REDIS_REST_TOKEN;
+      r = await invokeMockRoomReq(roomMod.default, { url: '/api/room?action=ice', query: { action: 'ice' } });
+      assert.equal(r.statusCode, 503, 'API must refuse to run on per-instance memory in production');
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k];
+      Object.assign(process.env, savedEnv);
+    }
+
+    // 2. ICE (TURN credentials) is rate limited per IP: 30 per hour
+    const handler = createRoomHandler({ store: new Map(), nowFn: () => 1_700_000_000_000, env: {} });
+    for (let i = 0; i < 30; i++) {
+      const r = await invokeMockRoomReq(handler, { url: '/api/room?action=ice', query: { action: 'ice' }, ip: '198.51.100.5' });
+      assert.equal(r.statusCode, 200, `ice #${i + 1} should pass`);
+    }
+    const iceOver = await invokeMockRoomReq(handler, { url: '/api/room?action=ice', query: { action: 'ice' }, ip: '198.51.100.5' });
+    assert.equal(iceOver.statusCode, 429, '31st ice request in an hour must be refused');
+
+    // 3. Room reads are rate limited too (240 per hour), so codes cannot be brute-forced
+    let lastRead = null;
+    for (let i = 0; i < 241; i++) {
+      lastRead = await invokeMockRoomReq(handler, { url: '/api/room?code=ABCDE', query: { code: 'ABCDE' }, ip: '198.51.100.6' });
+    }
+    assert.equal(lastRead.statusCode, 429, '241st room read in an hour must be refused');
+
+    // 4. Custom room codes shorter than 6 characters are rejected
+    const shortCode = await invokeMockRoomReq(handler, {
+      method: 'POST', url: '/api/room?action=create', query: { action: 'create' }, body: { offer, code: 'ABCD' }, ip: '198.51.100.7',
+    });
+    assert.equal(shortCode.statusCode, 400);
+
+    // 5. Upstash: two guests answering the same room at once -> exactly one wins
+    const kv = new Map();
+    const fakeUpstash = async (_url, init) => {
+      const [cmd, ...args] = JSON.parse(init.body);
+      let result = null;
+      if (cmd === 'INCR') { result = Number(kv.get(args[0]) || 0) + 1; kv.set(args[0], String(result)); }
+      else if (cmd === 'EXPIRE') result = 1;
+      else if (cmd === 'GET') result = kv.has(args[0]) ? kv.get(args[0]) : null;
+      else if (cmd === 'MGET') result = args.map((k) => (kv.has(k) ? kv.get(k) : null));
+      else if (cmd === 'SET') {
+        const [key, value, ...opts] = args;
+        if (opts.includes('NX') && kv.has(key)) result = null;
+        else if (opts.includes('XX') && !kv.has(key)) result = null;
+        else { kv.set(key, value); result = 'OK'; }
+      }
+      return { ok: true, status: 200, async json() { return { result }; } };
+    };
+    const upstashHandler = createRoomHandler({
+      nowFn: () => 1_700_000_000_000,
+      fetchFn: fakeUpstash,
+      env: { KV_REST_API_URL: 'https://kv.example', KV_REST_API_TOKEN: 'tok' },
+    });
+    const created = await invokeMockRoomReq(upstashHandler, {
+      method: 'POST', url: '/api/room?action=create', query: { action: 'create' }, body: { offer }, ip: '198.51.100.8',
+    });
+    assert.equal(created.statusCode, 200);
+    const code = created.json.code;
+    const answers = await Promise.all(['g1', 'g2'].map((g) => invokeMockRoomReq(upstashHandler, {
+      method: 'POST', url: '/api/room?action=answer', query: { action: 'answer' },
+      body: { code, answer: { type: 'answer', sdp: g }, guestMeta: { guestBikeId: g } }, ip: '198.51.100.9',
+    })));
+    const statuses = answers.map((a) => a.statusCode).sort();
+    assert.deepEqual(statuses, [200, 409], `Exactly one guest may join, got ${statuses}`);
+    const winner = answers.find((a) => a.statusCode === 200);
+    const roomAfter = await invokeMockRoomReq(upstashHandler, { url: `/api/room?code=${code}`, query: { code }, ip: '198.51.100.9' });
+    assert.equal(roomAfter.statusCode, 200);
+    assert.ok(roomAfter.json.answer && ['g1', 'g2'].includes(roomAfter.json.answer.sdp), 'Room must expose the winning answer');
+    assert.equal(roomAfter.json.guestMeta.guestBikeId, roomAfter.json.answer.sdp);
+    assert.ok(winner);
+  });
+
+  await runTest('vercel.json security headers: CSP allows exactly the inline import map, no other inline script', () => {
+    const vercel = JSON.parse(fs.readFileSync(path.join(__dirname, 'vercel.json'), 'utf8'));
+    const all = vercel.headers.find((h) => h.source === '/(.*)');
+    assert.ok(all, 'Expected a catch-all header rule');
+    const get = (k) => all.headers.find((h) => h.key.toLowerCase() === k.toLowerCase())?.value || '';
+    const csp = get('Content-Security-Policy');
+    assert.match(csp, /frame-ancestors 'none'/);
+    assert.match(csp, /object-src 'none'/);
+    assert.ok(!/'unsafe-eval'/.test(csp), 'CSP must not allow unsafe-eval');
+    assert.equal(get('X-Frame-Options'), 'DENY');
+    assert.equal(get('X-Content-Type-Options'), 'nosniff');
+
+    const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+    const inline = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    assert.equal(inline.length, 1, 'Only the import map may be inline (move other scripts to files)');
+    assert.ok(!/[\r\n]/.test(inline[0]), 'Import map must stay on one line so its hash is identical on Windows and Linux');
+    const hash = crypto.createHash('sha256').update(inline[0], 'utf8').digest('base64');
+    assert.ok(csp.includes(`'sha256-${hash}'`), `CSP script-src must include the import map hash sha256-${hash}`);
   });
 
   await runTest('server.js mounts /api/room over live HTTP and serves netcode.js + .glb MIME types', async () => {
