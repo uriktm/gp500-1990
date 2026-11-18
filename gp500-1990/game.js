@@ -219,7 +219,7 @@ export function initGame() {
   // Game configuration state
   const config = {
     mode: 'gp',              // 'gp' | 'championship' | 'duel' | 'solo'
-    splitMode: 'horizontal', // 'horizontal' | 'vertical'
+    splitMode: 'vertical', // 'horizontal' | 'vertical' (left / right: WASD rider left, arrow-keys rider right)
     trackId: 'sakura',       // 'sakura' | 'monterey' | 'cathedral'
     laps: 3,                 // 3 | 5 | 8
     difficulty: 'pro',       // 'rookie' | 'pro' | 'legend'

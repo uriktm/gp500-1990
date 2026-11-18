@@ -451,12 +451,12 @@
         <div class="config-card">
           <label class="config-label" for="select-split">SPLIT ORIENTATION <span class="key-hint">[V]</span></label>
           <select id="select-split" class="gp-select">
-            <option value="horizontal" selected>Horizontal (Top / Bottom)</option>
-            <option value="vertical">Vertical (Left / Right)</option>
+            <option value="horizontal">Horizontal (Top / Bottom)</option>
+            <option value="vertical" selected>Vertical (Left / Right)</option>
           </select>
           <div class="Segmented-pills" data-for="select-split">
-            <button type="button" class="seg-btn active" data-value="horizontal">Horizontal (Top / Bottom)</button>
-            <button type="button" class="seg-btn" data-value="vertical">Vertical (Left / Right)</button>
+            <button type="button" class="seg-btn" data-value="horizontal">Horizontal (Top / Bottom)</button>
+            <button type="button" class="seg-btn active" data-value="vertical">Vertical (Left / Right)</button>
           </div>
         </div>
 
@@ -737,7 +737,7 @@
   <!-- =====================================================================
        SPLIT-SCREEN RACE HUD
        ===================================================================== -->
-  <section id="race-hud" class="hud-layer hidden" data-split="horizontal" aria-label="Race Telemetry HUD">
+  <section id="race-hud" class="hud-layer hidden" data-split="vertical" aria-label="Race Telemetry HUD">
     <!-- Player 1 Viewport HUD -->
     <div id="hud-p1" class="player-hud hud-p1">
       <!-- Top-Left Timing & Position Chyron -->
