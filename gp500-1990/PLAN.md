@@ -172,3 +172,17 @@ node c:\projects\game\gp500-1990\test_gp500.js
 ### אימות ידני (Manual Verification)
 1. הרצת `node c:\projects\game\gp500-1990\server.js` ופתיחת המשחק בדפדפן.
 2. בדיקת שליטה במקביל ב-2 שחקנים (`WASD + Space` מול `Arrows + Enter`) במסך חצוי ב-60 FPS.
+
+---
+
+## סטטוס אונליין 1v1 (עודכן 2026-11-19)
+
+**נעשה:**
+- [x] הקוד: הכפתורים נדלקים לבד כש-`/api/room?action=status` עונה `{ online: true }`; בדיקת שני דפדפנים מקצה לקצה עוברת (חדר, P2P, מירוץ מסונכרן, 0 שגיאות).
+- [x] Vercel: `GP500_ONLINE=1` (Production + Preview).
+- [x] Upstash Redis (Free, Washington D.C.) מחובר לפרויקט `gp500-1990` עם קידומת `KV` → `KV_REST_API_URL`, `KV_REST_API_TOKEN`.
+
+**עוד לא נעשה (נדחה בכוונה):**
+- [ ] **Cloudflare TURN** — ליצור מפתח (Realtime → TURN Server) ולהוסיף ב-Vercel `TURN_KEY_ID` ו-`TURN_API_TOKEN` (Production + Preview). בלי זה האונליין עובד ב-STUN בלבד, וחיבורים מגלישה סלולרית / רשתות ארגוניות עלולים להיכשל.
+- [ ] **מיזוג ל-`main`** — השינויים בענף `ccr-0f026dfd-b1bt8a`; האתר הציבורי נבנה מ-`main`, ורק בנייה חדשה קולטת את משתני הסביבה.
+- [ ] **בדיקה אמיתית** — מחשב מול טלפון על גלישה סלולרית; אחרי TURN גם עם `&relay=1` (תג `RELAY`).
