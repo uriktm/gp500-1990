@@ -109,9 +109,9 @@ async function main() {
   const trackMod = await import('./track.js');
   const { TRACKS, createTrack } = trackMod;
 
-  await runTest('Exports TRACKS metadata and createTrack for sakura, monterey, cathedral', () => {
+  await runTest('Exports TRACKS metadata and createTrack for all five circuits', () => {
     assert.ok(Array.isArray(TRACKS) && TRACKS.length >= 3, 'TRACKS should list 3 circuits');
-    for (const id of ['sakura', 'monterey', 'cathedral']) {
+    for (const id of ['sakura', 'monterey', 'cathedral', 'andalucia', 'basscoast']) {
       const t = createTrack(id);
       assert.equal(t.id, id);
       assert.ok(t.totalLength > 800, `Track ${id} totalLength (${t.totalLength}) should be > 800m`);
@@ -121,7 +121,7 @@ async function main() {
     }
   });
 
-  for (const trackId of ['sakura', 'monterey', 'cathedral']) {
+  for (const trackId of ['sakura', 'monterey', 'cathedral', 'andalucia', 'basscoast']) {
     const track = createTrack(trackId);
 
     await runTest(`[${trackId}] Closed loop continuity at s=0 vs s=totalLength`, () => {
@@ -498,7 +498,7 @@ async function main() {
 
     for (let step = 0; step < maxSteps; step++) {
       stepsRun++;
-      const input = computeAIInput(aiRider, sakura, [aiRider], 'pro');
+      const input = computeAIInput(aiRider, sakura, [aiRider], 'easy');
       assert.ok(input.throttle >= 0 && input.throttle <= 1, 'Invalid AI throttle');
       assert.ok(input.brake >= 0 && input.brake <= 1, 'Invalid AI brake');
       assert.ok(input.steer >= -1 && input.steer <= 1, 'Invalid AI steer');
@@ -903,7 +903,7 @@ async function main() {
     };
 
     const raceRenderer = createRaceRenderer(mockCanvas);
-    for (const trackId of ['sakura', 'monterey', 'cathedral']) {
+    for (const trackId of ['sakura', 'monterey', 'cathedral', 'andalucia', 'basscoast']) {
       const trk = createTrack(trackId);
       raceRenderer.buildTrackScene(trk);
     }
@@ -1050,7 +1050,7 @@ async function main() {
     };
 
     const champ = createChampionshipManager({ storage: mockStorage, storageKey: 'test_champ_1990', autoLoad: false });
-    champ.startNewChampionship({ laps: 3, difficulty: 'pro', p1BikeId: 'akagi', p2BikeId: 'shiden' });
+    champ.startNewChampionship({ laps: 3, difficulty: 'easy', p1BikeId: 'akagi', p2BikeId: 'shiden' });
 
     assert.equal(champ.isActive(), true);
     assert.equal(champ.isCompleted(), false);

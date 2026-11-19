@@ -67,6 +67,15 @@
             Four factory V4 screamers, 120Hz Frenet lean physics, and razor-sharp powerbands from 8,500 to 12,500 RPM. Sweep the spotlight across the tarmac to expose the twin-spar CAD chassis, then drop straight onto the starting grid.
           </p>
 
+          <div class="hero-difficulty" role="group" aria-label="Difficulty">
+            <span class="hero-difficulty-label">DIFFICULTY</span>
+            <div class="Segmented-pills" data-for="select-difficulty">
+              <button type="button" class="seg-btn active" data-value="easy">EASY</button>
+              <button type="button" class="seg-btn" data-value="medium">MEDIUM</button>
+              <button type="button" class="seg-btn" data-value="hard">HARD</button>
+            </div>
+          </div>
+
           <div class="hero-cta-row">
             <button id="btn-hero-quickplay" type="button" class="cta-primary">QUICK 2P RACE</button>
             <button id="btn-hero-online" type="button" class="cta-online">PLAY ONLINE 1v1</button>
@@ -206,7 +215,7 @@
       <div class="section-container">
         <header class="section-header reveal-block">
           <span class="section-eyebrow">1990 FIM CHAMPIONSHIP CALENDAR</span>
-          <h2 class="section-title">THREE LEGENDARY CIRCUITS</h2>
+          <h2 class="section-title">FIVE LEGENDARY CIRCUITS</h2>
           <p class="section-lead">Uniform arc-length 3D Catmull-Rom splines with elevation climbs, downhill S-drops, and wide 14-meter racing asphalt.</p>
         </header>
 
@@ -216,6 +225,8 @@
               <button type="button" class="circuit-tab-btn active" data-track-id="sakura" role="tab" aria-selected="true">R1 · SAKURA GP</button>
               <button type="button" class="circuit-tab-btn" data-track-id="monterey" role="tab" aria-selected="false">R2 · MONTEREY RIDGE</button>
               <button type="button" class="circuit-tab-btn" data-track-id="cathedral" role="tab" aria-selected="false">R3 · CATHEDRAL TT</button>
+              <button type="button" class="circuit-tab-btn" data-track-id="andalucia" role="tab" aria-selected="false">SPAIN · ANDALUCÍA</button>
+              <button type="button" class="circuit-tab-btn" data-track-id="basscoast" role="tab" aria-selected="false">AUSTRALIA · BASS COAST</button>
             </div>
 
             <div class="circuit-detail-card">
@@ -469,11 +480,15 @@
               <option value="sakura" selected>Sakura GP Circuit</option>
               <option value="monterey">Monterey Ridge (Corkscrew)</option>
               <option value="cathedral">Cathedral TT</option>
+              <option value="andalucia">Andalucía Circuit (Spain)</option>
+              <option value="basscoast">Bass Coast Circuit (Australia)</option>
             </select>
             <div class="Segmented-pills" data-for="select-track">
               <button type="button" class="seg-btn active" data-value="sakura">Sakura GP</button>
               <button type="button" class="seg-btn" data-value="monterey">Monterey Ridge</button>
               <button type="button" class="seg-btn" data-value="cathedral">Cathedral TT</button>
+              <button type="button" class="seg-btn" data-value="andalucia">Andalucía</button>
+              <button type="button" class="seg-btn" data-value="basscoast">Bass Coast</button>
             </div>
             <p id="menu-track-desc" class="track-desc">Flowing fast 1990 GP circuit with main straight, sweeping curves, and a tight chicane.</p>
           </div>
@@ -499,16 +514,16 @@
             </div>
           </div>
           <div class="sub-config">
-            <label class="config-label" for="select-difficulty">AI CLASS DIFFICULTY</label>
+            <label class="config-label" for="select-difficulty">DIFFICULTY</label>
             <select id="select-difficulty" class="gp-select">
-              <option value="rookie">Rookie</option>
-              <option value="pro" selected>Pro 500cc</option>
-              <option value="legend">1990 Legend</option>
+              <option value="easy" selected>Easy</option>
+              <option value="medium">Medium</option>
+              <option value="hard">Hard</option>
             </select>
             <div class="Segmented-pills" data-for="select-difficulty">
-              <button type="button" class="seg-btn" data-value="rookie">Rookie</button>
-              <button type="button" class="seg-btn active" data-value="pro">Pro 500cc</button>
-              <button type="button" class="seg-btn" data-value="legend">1990 Legend</button>
+              <button type="button" class="seg-btn active" data-value="easy">EASY</button>
+              <button type="button" class="seg-btn" data-value="medium">MEDIUM</button>
+              <button type="button" class="seg-btn" data-value="hard">HARD</button>
             </div>
           </div>
         </div>
@@ -1148,6 +1163,8 @@
                 <option value="sakura" selected>Sakura GP Circuit</option>
                 <option value="monterey">Monterey Ridge (Corkscrew)</option>
                 <option value="cathedral">Cathedral TT</option>
+                <option value="andalucia">Andalucía Circuit</option>
+                <option value="basscoast">Bass Coast Circuit</option>
               </select>
             </div>
 

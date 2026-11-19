@@ -7,7 +7,7 @@ import {
   stepRiderPhysics,
   rankRiders
 } from './physics.js';
-import { computeAIInput } from './ai.js';
+import { computeAIInput, getDifficultyProfile, DIFFICULTY_KEYS } from './ai.js';
 import { createInputManager } from './input.js';
 import { isTouchDevice, createTouchControls, enterLandscapeFullscreen } from './touch.js';
 import { createRaceRenderer } from './renderer.js';
@@ -104,7 +104,7 @@ function clamp(v, min, max) {
 
 /**
  * Parses URL query parameters for automated verification and quick launch hooks:
- * ?autostart=1&mode=gp|duel|solo|championship|online-duel&track=sakura|monterey|cathedral&split=horizontal|vertical&demo=1&room=XXXXX&relay=1
+ * ?autostart=1&mode=gp|duel|solo|championship|online-duel&track=<any TRACKS id>&split=horizontal|vertical&demo=1&room=XXXXX&relay=1
  */
 // Online 1v1 is switched off until its networking (TURN relay + room store) is set up:
 // the buttons stay visible but disabled.
@@ -143,7 +143,7 @@ export function parseUrlConfig(searchStr = typeof window !== 'undefined' && wind
   }
 
   const trackParam = (params.get('track') || '').toLowerCase();
-  if (['sakura', 'monterey', 'cathedral'].includes(trackParam)) {
+  if (TRACKS.some((t) => t.id === trackParam)) {
     parsed.trackId = trackParam;
   }
 
@@ -158,7 +158,7 @@ export function parseUrlConfig(searchStr = typeof window !== 'undefined' && wind
   }
 
   const diffParam = (params.get('difficulty') || '').toLowerCase();
-  if (['rookie', 'pro', 'legend'].includes(diffParam)) {
+  if (DIFFICULTY_KEYS.includes(diffParam)) {
     parsed.difficulty = diffParam;
   }
 
@@ -236,9 +236,9 @@ export function initGame() {
   const config = {
     mode: 'gp',              // 'gp' | 'championship' | 'duel' | 'solo'
     splitMode: 'vertical', // 'horizontal' | 'vertical' (left / right: WASD rider left, arrow-keys rider right)
-    trackId: 'sakura',       // 'sakura' | 'monterey' | 'cathedral'
+    trackId: 'sakura',       // any id from TRACKS (track.js)
     laps: 3,                 // 3 | 5 | 8
-    difficulty: 'pro',       // 'rookie' | 'pro' | 'legend'
+    difficulty: 'easy',      // 'easy' | 'medium' | 'hard' (ai.js DIFFICULTY_PROFILES)
     p1BikeId: 'akagi',
     p2BikeId: 'shiden',
     demo: false,             // when true, human slots are AI-driven
@@ -1238,6 +1238,7 @@ export function initGame() {
         isAI: p2IsAI,
         playerIndex: p2IsAI ? -1 : 1,
         difficulty: config.difficulty,
+        perfBoost: p2IsAI ? getDifficultyProfile(config.difficulty).perfBoost : 1,
         bike: p2Bike,
         s: 18.0,
         d: 2.2,
@@ -1270,6 +1271,7 @@ export function initGame() {
         isAI: true,
         playerIndex: -1,
         difficulty: config.difficulty,
+        perfBoost: getDifficultyProfile(config.difficulty).perfBoost,
         bike: aiBike,
         s: gridS,
         d: gridD,
@@ -2386,12 +2388,9 @@ export function initGame() {
   function syncSelectAndPills(selectId, value) {
     const sel = document.getElementById(selectId);
     if (sel) sel.value = String(value);
-    const pillGroup = document.querySelector(`.Segmented-pills[data-for="${selectId}"]`);
-    if (pillGroup) {
-      pillGroup.querySelectorAll('.seg-btn').forEach((btn) => {
-        btn.classList.toggle('active', btn.getAttribute('data-value') === String(value));
-      });
-    }
+    document.querySelectorAll(`.Segmented-pills[data-for="${selectId}"] .seg-btn`).forEach((btn) => {
+      btn.classList.toggle('active', btn.getAttribute('data-value') === String(value));
+    });
   }
 
   function updateP2GarageLabels() {
@@ -2419,8 +2418,6 @@ export function initGame() {
 
   function bindConfigControl(selectId, configKey, transform = (v) => v, onChange = null) {
     const sel = document.getElementById(selectId);
-    const pillGroup = document.querySelector(`.Segmented-pills[data-for="${selectId}"]`);
-
     const applyVal = (rawVal) => {
       config[configKey] = transform(rawVal);
       syncSelectAndPills(selectId, rawVal);
@@ -2430,11 +2427,9 @@ export function initGame() {
     if (sel) {
       sel.addEventListener('change', (e) => applyVal(e.target.value));
     }
-    if (pillGroup) {
-      pillGroup.querySelectorAll('.seg-btn').forEach((btn) => {
-        btn.addEventListener('click', () => applyVal(btn.getAttribute('data-value')));
-      });
-    }
+    document.querySelectorAll(`.Segmented-pills[data-for="${selectId}"] .seg-btn`).forEach((btn) => {
+      btn.addEventListener('click', () => applyVal(btn.getAttribute('data-value')));
+    });
   }
 
   function bindBikeCards() {
