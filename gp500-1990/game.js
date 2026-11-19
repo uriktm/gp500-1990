@@ -106,9 +106,26 @@ function clamp(v, min, max) {
  * Parses URL query parameters for automated verification and quick launch hooks:
  * ?autostart=1&mode=gp|duel|solo|championship|online-duel&track=<any TRACKS id>&split=horizontal|vertical&demo=1&room=XXXXX&relay=1
  */
-// Online 1v1 is switched off until its networking (TURN relay + room store) is set up:
-// the buttons stay visible but disabled.
-const ONLINE_ENABLED = false;
+// Online 1v1 turns itself on only when /api/room?action=status answers (the deployed endpoint is
+// closed until GP500_ONLINE=1 and Upstash are set up); until then the buttons stay visible but disabled.
+let ONLINE_ENABLED = false;
+const ONLINE_STATUS_TIMEOUT_MS = 4000;
+
+export async function probeOnlineAvailability(fetchFn = typeof fetch === 'function' ? fetch : null) {
+  if (typeof fetchFn !== 'function') return false;
+  const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), ONLINE_STATUS_TIMEOUT_MS) : null;
+  try {
+    const res = await fetchFn('/api/room?action=status', { cache: 'no-store', signal: ctrl?.signal });
+    if (!res || !res.ok) return false;
+    const body = await res.json().catch(() => null);
+    return Boolean(body && body.online === true);
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 function clampLaps(raw) {
   const laps = Math.round(Number(raw));
@@ -1456,13 +1473,15 @@ export function initGame() {
     ['btn-nav-online', 'btn-hero-online', 'btn-paddock-online'].forEach((id) => {
       const btn = document.getElementById(id);
       if (!btn) return;
+      if (!btn.dataset.onlineLabel) btn.dataset.onlineLabel = btn.textContent.trim();
       btn.disabled = true;
       btn.classList.add('coming-soon');
       btn.title = 'Online play is coming soon';
-      btn.textContent = `${btn.textContent.trim()} · SOON`;
+      btn.textContent = `${btn.dataset.onlineLabel} · SOON`;
     });
     const option = document.querySelector('#select-mode option[value="online-duel"]');
     if (option) {
+      if (!option.dataset.onlineLabel) option.dataset.onlineLabel = option.textContent.trim();
       option.disabled = true;
       option.textContent = 'Online 1v1 Duel (coming soon)';
     }
@@ -1471,6 +1490,28 @@ export function initGame() {
       pill.disabled = true;
       pill.classList.add('coming-soon');
       pill.title = 'Online play is coming soon';
+    }
+  }
+
+  function enableOnlineEntryPoints() {
+    ['btn-nav-online', 'btn-hero-online', 'btn-paddock-online'].forEach((id) => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      btn.disabled = false;
+      btn.classList.remove('coming-soon');
+      btn.removeAttribute('title');
+      if (btn.dataset.onlineLabel) btn.textContent = btn.dataset.onlineLabel;
+    });
+    const option = document.querySelector('#select-mode option[value="online-duel"]');
+    if (option) {
+      option.disabled = false;
+      if (option.dataset.onlineLabel) option.textContent = option.dataset.onlineLabel;
+    }
+    const pill = document.querySelector('.Segmented-pills[data-for="select-mode"] [data-value="online-duel"]');
+    if (pill) {
+      pill.disabled = false;
+      pill.classList.remove('coming-soon');
+      pill.removeAttribute('title');
     }
   }
 
@@ -2757,7 +2798,8 @@ export function initGame() {
   }
 
   // Initialize 3D Showroom (deferred when autostart/replay/room invite) and Website Showcase controller
-  const immediateRaceBoot = Boolean(urlCfg.replay || urlCfg.autostart || (ONLINE_ENABLED && urlCfg.room));
+  const roomInvite = Boolean(urlCfg.room && !urlCfg.replay && !urlCfg.autostart);
+  const immediateRaceBoot = Boolean(urlCfg.replay || urlCfg.autostart || roomInvite);
   if (!immediateRaceBoot) {
     ensureShowroom();
   }
@@ -2780,15 +2822,28 @@ export function initGame() {
     enterReplayMode();
   } else if (urlCfg.autostart) {
     startRaceSession();
-  } else if (ONLINE_ENABLED && urlCfg.room) {
+  } else if (roomInvite) {
     viewMode = 'site';
     if (siteNavbar) siteNavbar.classList.remove('hidden');
     if (siteLanding) siteLanding.classList.remove('hidden');
-    openOnlineLobby({ tab: 'join', roomCode: urlCfg.room });
-    joinOnlineRoom(urlCfg.room);
   } else {
     applySiteModeClasses('site');
   }
+
+  probeOnlineAvailability().then((online) => {
+    if (online) {
+      ONLINE_ENABLED = true;
+      enableOnlineEntryPoints();
+      if (roomInvite) {
+        openOnlineLobby({ tab: 'join', roomCode: urlCfg.room });
+        joinOnlineRoom(urlCfg.room);
+      }
+    } else if (roomInvite) {
+      // Invite link but online play is off: fall back to the normal site
+      applySiteModeClasses('site');
+      ensureShowroom();
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // MAIN REQUESTANIMATIONFRAME LOOP & FPS TRACKER

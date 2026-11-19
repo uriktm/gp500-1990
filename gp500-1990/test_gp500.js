@@ -1793,6 +1793,10 @@ async function main() {
       delete process.env.UPSTASH_REDIS_REST_TOKEN;
       r = await invokeMockRoomReq(roomMod.default, { url: '/api/room?action=ice', query: { action: 'ice' } });
       assert.equal(r.statusCode, 503, 'API must refuse to run on per-instance memory in production');
+      // status reports closed the same way, so the page keeps the online buttons disabled
+      delete process.env.GP500_ONLINE;
+      r = await invokeMockRoomReq(roomMod.default, { url: '/api/room?action=status', query: { action: 'status' } });
+      assert.equal(r.statusCode, 503, 'status must be 503 while online play is off');
     } finally {
       for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k];
       Object.assign(process.env, savedEnv);
@@ -2076,6 +2080,20 @@ async function main() {
     const parsedOnline = gameMod.parseUrlConfig('?room=ab12c&relay=1');
     assert.equal(parsedOnline.room, 'AB12C');
     assert.equal(parsedOnline.relay, true);
+
+    // The page switches online play on only when /api/room?action=status answers { online: true }
+    const okFetch = async () => ({ ok: true, json: async () => ({ online: true }) });
+    const closedFetch = async () => ({ ok: false, status: 503, json: async () => ({ error: 'off' }) });
+    const failFetch = async () => { throw new Error('network down'); };
+    assert.equal(await gameMod.probeOnlineAvailability(okFetch), true);
+    assert.equal(await gameMod.probeOnlineAvailability(closedFetch), false);
+    assert.equal(await gameMod.probeOnlineAvailability(failFetch), false);
+    assert.equal(await gameMod.probeOnlineAvailability(null), false);
+    const localStatus = await invokeMockRoomReq(
+      (await import('./api/room.js')).createRoomHandler({ store: new Map(), env: {} }),
+      { url: '/api/room?action=status', query: { action: 'status' } }
+    );
+    assert.equal(localStatus.statusCode, 200);
 
     const zipBuf = fs.readFileSync(path.join(__dirname, 'dist', 'gp500-1990-web.zip'));
     assert.ok(zipBuf.includes(Buffer.from('netcode.js', 'utf8')), 'Web ZIP archive must include netcode.js');
