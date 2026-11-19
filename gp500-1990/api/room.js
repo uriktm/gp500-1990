@@ -470,6 +470,11 @@ export function createRoomHandler(options = {}) {
 
       if (method === 'GET') {
         const action = String(query.action || '').trim().toLowerCase();
+        if (action === 'status') {
+          // Lets the page find out whether online play is switched on; no storage, no TURN call
+          sendJson(res, 200, { online: true });
+          return;
+        }
         if (action === 'ice') {
           if (await rateLimited(storage, 'ice', req, res)) return;
           const iceServers = await getIceServers();

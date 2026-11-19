@@ -40,8 +40,12 @@ Locally, `/api/room` uses an in-memory `Map` with 600-second room TTL and STUN-o
      - `TURN_API_TOKEN` — Cloudflare TURN API Token
    - *(Optional static fallback if using another TURN provider: `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`.)*
 
-5. **Redeploy**
+5. **Switch online play on**
+   - Add `GP500_ONLINE` = `1` in Vercel Project -> **Settings -> Environment Variables**. Until it is set (and Upstash is connected), `/api/room` answers `503`.
+
+6. **Redeploy**
    - Trigger a **Redeploy** in Vercel **Deployments** so the `/api/room` serverless function picks up the Redis and TURN environment variables.
+   - No code change is needed: on load the page calls `GET /api/room?action=status` and enables the PLAY ONLINE buttons only when it answers `{ "online": true }`.
 
 ---
 
@@ -59,6 +63,7 @@ Locally, `/api/room` uses an in-memory `Map` with 600-second room TTL and STUN-o
 
 | Method & Query | Request Body | Success Response | Error Codes |
 |---|---|---|---|
+| `GET /api/room?action=status` | — | `200 { online: true }` | `503` (online play off / not configured) |
 | `GET /api/room?action=ice` | — | `200 { iceServers }` | `405` |
 | `POST /api/room?action=create` | `{ offer, hostMeta?, code? }` | `200 { code, expiresIn: 600 }` | `400`, `409` (code taken), `429` (>20/hr per IP) |
 | `GET /api/room?code=XXXXX` | — | `200 { code, offer, answer, hostMeta, guestMeta, iceServers }` | `400`, `404` (missing/expired) |

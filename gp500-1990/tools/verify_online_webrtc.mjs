@@ -5,7 +5,7 @@
  * owner-authoritative KeyW racing sync (> 25m on both local & proxy bikes), visibilitychange
  * OPPONENT AWAY banner, 0 console/page/HTTP errors, and saves verification screenshots.
  *
- * Usage: node c:\projects\game\gp500-1990\tools\verify_online_webrtc.mjs
+ * Usage: node tools/verify_online_webrtc.mjs   (CHROME_PATH=/path/to/chrome to pick the browser)
  */
 
 import fs from 'node:fs';
@@ -40,6 +40,12 @@ function resolveOutputDir() {
 const OUTPUT_DIR = resolveOutputDir();
 
 const BROWSER_CANDIDATES = [
+  ...(process.env.CHROME_PATH ? [process.env.CHROME_PATH] : []),
+  '/opt/pw-browsers/chromium',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
@@ -363,7 +369,8 @@ async function main() {
       hostCdp.eval(`(() => {
         const gp = window.__gp500;
         const btn = document.getElementById('btn-nav-online');
-        return { ok: Boolean(gp && btn) };
+        // Online buttons turn on once /api/room?action=status answers
+        return { ok: Boolean(gp && btn && !btn.disabled) };
       })()`)
     );
 
@@ -517,7 +524,15 @@ async function main() {
       guestCdp.dispatchKey('keyDown', 'KeyW', 'w', 87),
     ]);
 
-    const raceProgress = await waitUntil('Both bikes advance s > 25m and both sides see opponent proxy > 25m', async () => {
+    // Headless software rendering can run at a few fps, and the sim does at most 10 physics steps a
+    // frame, so measure distance from where each bike started and allow plenty of wall time.
+    const startState = await Promise.all([
+      hostCdp.eval(`window.__gp500?.getOnlineState?.()`),
+      guestCdp.eval(`window.__gp500?.getOnlineState?.()`),
+    ]);
+    const hStart = startState[0]?.localRider?.s || 0;
+    const gStart = startState[1]?.localRider?.s || 0;
+    const raceProgress = await waitUntil('Both bikes advance > 25m and both sides see opponent proxy advance > 25m', async () => {
       const [h, g] = await Promise.all([
         hostCdp.eval(`window.__gp500?.getOnlineState?.()`),
         guestCdp.eval(`window.__gp500?.getOnlineState?.()`),
@@ -527,7 +542,7 @@ async function main() {
       const gLoc = g?.localRider?.s || 0;
       const gRem = g?.remoteRider?.s || 0;
       return {
-        ok: hLoc > 25 && hRem > 25 && gLoc > 25 && gRem > 25,
+        ok: hLoc - hStart > 25 && hRem - gStart > 25 && gLoc - gStart > 25 && gRem - hStart > 25,
         hLoc,
         hRem,
         gLoc,
@@ -535,7 +550,7 @@ async function main() {
         hBuf: h?.bufferLength,
         gBuf: g?.bufferLength,
       };
-    }, 25000, 200);
+    }, 120000, 500);
 
     const hostProxyDelta = Math.abs(raceProgress.gLoc - raceProgress.hRem);
     const guestProxyDelta = Math.abs(raceProgress.hLoc - raceProgress.gRem);
