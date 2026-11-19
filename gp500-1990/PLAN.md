@@ -181,8 +181,8 @@ node c:\projects\game\gp500-1990\test_gp500.js
 - [x] הקוד: הכפתורים נדלקים לבד כש-`/api/room?action=status` עונה `{ online: true }`; בדיקת שני דפדפנים מקצה לקצה עוברת (חדר, P2P, מירוץ מסונכרן, 0 שגיאות).
 - [x] Vercel: `GP500_ONLINE=1` (Production + Preview).
 - [x] Upstash Redis (Free, Washington D.C.) מחובר לפרויקט `gp500-1990` עם קידומת `KV` → `KV_REST_API_URL`, `KV_REST_API_TOKEN`.
+- [x] מוזג ל-`main` (PR #1) ופורסם: https://gp500-1990.vercel.app/api/room?action=status מחזיר `{"online":true}`, ו-`action=ice` עונה 200 (Upstash עובד; STUN בלבד).
 
 **עוד לא נעשה (נדחה בכוונה):**
-- [ ] **Cloudflare TURN** — ליצור מפתח (Realtime → TURN Server) ולהוסיף ב-Vercel `TURN_KEY_ID` ו-`TURN_API_TOKEN` (Production + Preview). בלי זה האונליין עובד ב-STUN בלבד, וחיבורים מגלישה סלולרית / רשתות ארגוניות עלולים להיכשל.
-- [ ] **מיזוג ל-`main`** — השינויים בענף `ccr-0f026dfd-b1bt8a`; האתר הציבורי נבנה מ-`main`, ורק בנייה חדשה קולטת את משתני הסביבה.
+- [ ] **Cloudflare TURN** — אחרי הוספת המשתנים צריך Redeploy. ליצור מפתח (Realtime → TURN Server) ולהוסיף ב-Vercel `TURN_KEY_ID` ו-`TURN_API_TOKEN` (Production + Preview). בלי זה האונליין עובד ב-STUN בלבד, וחיבורים מגלישה סלולרית / רשתות ארגוניות עלולים להיכשל.
 - [ ] **בדיקה אמיתית** — מחשב מול טלפון על גלישה סלולרית; אחרי TURN גם עם `&relay=1` (תג `RELAY`).
