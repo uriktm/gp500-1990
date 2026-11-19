@@ -7,39 +7,83 @@ function clamp(v, min, max) {
   return v < min ? min : v > max ? max : v;
 }
 
-const DIFFICULTY_PROFILES = {
-  rookie: {
-    speedScale: 0.85,
-    maxLeanRatio: 0.56,
-    brakeDecel: 12.5,
-    throttleAggression: 0.85
-  },
-  pro: {
+// easy = the original 'Pro 500cc' AI. perfBoost scales the AI bike's engine (physics.js), so medium/hard
+// rivals are simply faster; shove lets hard rivals lean on a human rider who is alongside them.
+export const DIFFICULTY_PROFILES = {
+  easy: {
     speedScale: 0.94,
     maxLeanRatio: 0.64,
     brakeDecel: 14.0,
-    throttleAggression: 0.95
+    throttleAggression: 0.95,
+    perfBoost: 1.0,
+    shove: false
   },
-  legend: {
+  medium: {
     speedScale: 1.0,
     maxLeanRatio: 0.70,
     brakeDecel: 15.5,
-    throttleAggression: 1.0
+    throttleAggression: 1.0,
+    perfBoost: 1.0,
+    shove: false
+  },
+  hard: {
+    speedScale: 1.08,
+    maxLeanRatio: 0.74,
+    brakeDecel: 16.5,
+    throttleAggression: 1.0,
+    perfBoost: 1.11,
+    shove: true
   }
 };
 
-export function computeAIInput(rider, track, allRiders = [], difficulty = 'pro') {
+export const DIFFICULTY_KEYS = Object.keys(DIFFICULTY_PROFILES);
+
+export function getDifficultyProfile(key) {
+  return DIFFICULTY_PROFILES[String(key || '').toLowerCase()] || DIFFICULTY_PROFILES.easy;
+}
+
+// Shove timing (seconds of race time)
+const SHOVE_DURATION = 1.4;
+const SHOVE_COOLDOWN_MIN = 9;
+const SHOVE_COOLDOWN_RANGE = 8;
+const SHOVE_CHANCE_PER_SEC = 0.7;
+
+/**
+ * Hard AI only: when a human rider is right alongside at speed, sometimes steer into them for a moment.
+ * Returns the rider being shoved, or null. Sets rider.shoveTargetId so physics.js gives the push to the human.
+ */
+function chooseShoveTarget(rider, track, allRiders, dt) {
+  const now = rider.totalTime || 0;
+  if (rider.shoveTargetId && now < (rider.shoveUntil || 0)) {
+    const target = allRiders.find((o) => o && o.id === rider.shoveTargetId);
+    if (target && !target.finished) return target;
+  }
+  if (rider.shoveTargetId) {
+    rider.shoveTargetId = null;
+    rider.shoveCooldownUntil = now + SHOVE_COOLDOWN_MIN + Math.random() * SHOVE_COOLDOWN_RANGE;
+  }
+  if (now < (rider.shoveCooldownUntil || 0) || rider.speed < 25 || rider.finished) return null;
+
+  for (const other of allRiders) {
+    if (!other || other === rider || other.isAI || other.finished || other.offTrack) continue;
+    const ds = track.wrapS(other.s - rider.s);
+    const dsSigned = ds > track.totalLength / 2 ? ds - track.totalLength : ds;
+    const dd = Math.abs(other.d - rider.d);
+    if (Math.abs(dsSigned) < 3.5 && dd > 0.9 && dd < 3.2 && Math.random() < SHOVE_CHANCE_PER_SEC * dt) {
+      rider.shoveTargetId = other.id;
+      rider.shoveUntil = now + SHOVE_DURATION;
+      return other;
+    }
+  }
+  return null;
+}
+
+export function computeAIInput(rider, track, allRiders = [], difficulty = 'easy', dt = 1 / 120) {
   if (!track || !rider) {
     return { throttle: 0, brake: 0, steer: 0, tuck: false };
   }
 
-  const diffKey = String(difficulty || rider.difficulty || 'pro').toLowerCase();
-  const profile =
-    diffKey.includes('rookie') || diffKey.includes('easy')
-      ? DIFFICULTY_PROFILES.rookie
-      : diffKey.includes('legend') || diffKey.includes('hard')
-      ? DIFFICULTY_PROFILES.legend
-      : DIFFICULTY_PROFILES.pro;
+  const profile = getDifficultyProfile(difficulty || rider.difficulty);
 
   const halfW = track.halfWidth ?? 7.0;
   const maxBikeSpeed = (rider.bike?.stats?.maxSpeed ?? 85.0) * profile.speedScale;
@@ -92,6 +136,22 @@ export function computeAIInput(rider, track, allRiders = [], difficulty = 'pro')
     }
   }
 
+  let shoving = false;
+  if (profile.shove && allRiders && allRiders.length > 1) {
+    const victim = chooseShoveTarget(rider, track, allRiders, dt);
+    if (victim) {
+      shoving = true;
+      // Aim just past the victim's line and hold their speed, so the bikes stay side by side and touch
+      const side = Math.sign(victim.d - rider.d) || 1;
+      targetD = clamp(victim.d + side * 0.4, -(halfW - 0.5), halfW - 0.5);
+      const ds = track.wrapS(victim.s - rider.s);
+      const victimAhead = ds > track.totalLength / 2 ? ds - track.totalLength : ds;
+      targetSpeed = Math.min(targetSpeed, clamp(victim.speed + victimAhead * 0.8, 16.0, maxBikeSpeed));
+    }
+  } else if (rider.shoveTargetId) {
+    rider.shoveTargetId = null;
+  }
+
   // 3. Exact physical lateral controller:
   //    d_dot = v * sin(psi), d_ddot = g * tan(lean) - (v^2 * curvature / denom)
   const dError = rider.d - targetD;
@@ -102,7 +162,9 @@ export function computeAIInput(rider, track, allRiders = [], difficulty = 'pro')
   const effSpeedSq = Math.max(rider.speed * rider.speed, 36.0);
 
   // Critically damped PD feedback on lateral offset d and lateral velocity dDot
-  const latAccelFeedback = clamp(-2.4 * dError - 3.4 * dDot, -6.5, 6.5);
+  const latAccelFeedback = shoving
+    ? clamp(-5.0 * dError - 3.6 * dDot, -9.0, 9.0)
+    : clamp(-2.4 * dError - 3.4 * dDot, -6.5, 6.5);
   const reqTanLean = (anticipatedCurvature * effSpeedSq) / (GRAVITY * denom) + latAccelFeedback / GRAVITY;
   const idealLean = Math.atan(reqTanLean);
 

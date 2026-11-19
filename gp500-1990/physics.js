@@ -45,7 +45,10 @@ export function createRiderState(opts = {}) {
     name: opts.name ?? 'Rider',
     isAI: Boolean(opts.isAI),
     playerIndex: opts.playerIndex ?? (opts.isAI ? -1 : 0),
-    difficulty: opts.difficulty ?? 'pro',
+    difficulty: opts.difficulty ?? 'easy',
+    // AI engine multiplier from the difficulty profile (ai.js); humans stay at 1
+    perfBoost: opts.perfBoost ?? 1,
+    shoveTargetId: null,
     bike,
     s,
     d,
@@ -222,13 +225,14 @@ export function stepRiderPhysics(rider, input = {}, track, allRiders = [], dt = 
   }
 
   // 6. Longitudinal forces (2-stroke thrust, braking, aero drag, slope, gravel drag)
-  const bikeMaxSpeed = (rider.bike?.stats?.maxSpeed ?? 85.0) * (tuck ? 1.035 : 1.0) + rider.slipstreamBoost * 4.5;
+  const perfBoost = rider.perfBoost ?? 1;
+  const bikeMaxSpeed = (rider.bike?.stats?.maxSpeed ?? 85.0) * (tuck ? 1.035 : 1.0) * (1 + (perfBoost - 1) * 0.6) + rider.slipstreamBoost * 4.5;
   const accelStat = rider.bike?.stats?.accel ?? 1.0;
   const brakeStat = rider.bike?.stats?.braking ?? 1.0;
   const gearTorque = GEAR_TORQUE_MULT[rider.gear] ?? 1.0;
   const shiftCut = rider.shiftTimer > 0 ? 0.35 : 1.0;
 
-  const engineAccel = throttle * 16.8 * accelStat * gearTorque * powerbandMult * shiftCut * (1 + 0.12 * rider.slipstreamBoost);
+  const engineAccel = throttle * 16.8 * accelStat * perfBoost * gearTorque * powerbandMult * shiftCut * (1 + 0.12 * rider.slipstreamBoost);
   const brakeDecel = brake * 25.0 * brakeStat;
 
   const aeroDragCoeff = (tuck ? 0.00205 : 0.0024) * (1 - 0.18 * rider.slipstreamBoost);
@@ -305,7 +309,9 @@ export function stepRiderPhysics(rider, input = {}, track, allRiders = [], dt = 
       if (Math.abs(dsOther) < 2.1 && Math.abs(ddOther) < 1.05) {
         const pushDir = ddOther >= 0 ? -1 : 1;
         const overlap = 1.05 - Math.abs(ddOther);
-        rider.d += pushDir * overlap * 4.5 * dt;
+        // A hard AI rider leaning on someone (ai.js shove) barely moves; the rider being shoved takes the push
+        const shoveMult = other.shoveTargetId === rider.id ? 4.5 : rider.shoveTargetId === other.id ? 0.25 : 1;
+        rider.d += pushDir * overlap * 4.5 * shoveMult * dt;
         if (dsOther > 0 && rider.speed > other.speed) {
           rider.speed = Math.max(other.speed * 0.96, rider.speed - 4.0 * dt);
         }

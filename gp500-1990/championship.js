@@ -71,7 +71,7 @@ export function createChampionshipManager(options = {}) {
       rounds: [...CHAMPIONSHIP_ROUNDS],
       config: {
         laps: Number(configOverrides.laps) || 3,
-        difficulty: configOverrides.difficulty || 'pro',
+        difficulty: configOverrides.difficulty || 'easy',
         splitMode: configOverrides.splitMode || 'horizontal',
         p1BikeId: configOverrides.p1BikeId || 'akagi',
         p2BikeId: configOverrides.p2BikeId || 'shiden'

@@ -2309,6 +2309,34 @@ html.site-scroll #race-canvas {
   text-shadow: 0 2px 10px rgba(0, 0, 0, 0.75);
 }
 
+/* Difficulty picker on the landing page, right above QUICK RACE (shares state with the paddock pills) */
+.hero-difficulty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.hero-difficulty-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--gp-amber, #ffba08);
+}
+
+.hero-difficulty .Segmented-pills {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.hero-difficulty .seg-btn {
+  min-width: 84px;
+  padding: 9px 14px;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+}
+
 .hero-cta-row {
   display: flex;
   align-items: center;
